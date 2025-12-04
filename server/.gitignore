@@ -1,0 +1,25 @@
+node_modules/
+
+.env
+
+# Database (SQLite)
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Build
+dist/
+
+.tmp/
+temp/
+
+coverage/
+
+pids/
+*.pid
+*.seed
+*.pid.lock
