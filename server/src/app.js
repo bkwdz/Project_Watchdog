@@ -8,22 +8,27 @@ const app = express();
 const deviceRoutes = require("./routes/devices");
 const scanRoutes = require("./routes/scans");
 
-app.use("/api/devices", deviceRoutes);
-app.use("/api/scans", scanRoutes);
+const corsOrigin = process.env.CORS_ORIGIN;
+const parsedCorsOrigins = corsOrigin
+  ? corsOrigin
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+  : true;
 
-app.use(cors({
-  origin: "http://localhost:5173",
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
-
+app.use(
+  cors({
+    origin: parsedCorsOrigins,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 
 app.use(express.json());
 
-
 app.use(session({
-  secret: "dev_secret",
+  secret: process.env.SESSION_SECRET || "dev_secret",
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -34,6 +39,8 @@ app.use(session({
 }));
 
 
-app.use("/auth", authRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/devices", deviceRoutes);
+app.use("/api/scans", scanRoutes);
 
 module.exports = app;

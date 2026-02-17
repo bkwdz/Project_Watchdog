@@ -1,12 +1,12 @@
-import axios from "axios";
 import { useState } from "react";
+import api from "../api/api";
 
 const Scans = () => {
   const [ip, setIp] = useState("");
   const [result, setResult] = useState(null);
 
   const startScan = () => {
-    axios.post("http://localhost:8080/api/scans/start", { ip })
+    api.post("/scans/start", { ip })
       .then(res => setResult(res.data))
       .catch(err => console.log(err));
   };

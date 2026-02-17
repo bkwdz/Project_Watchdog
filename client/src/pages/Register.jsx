@@ -1,6 +1,7 @@
 import React, { useState, useContext } from 'react';
 import { AuthContext } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import api from '../api/api';
 
 export default function Register() {
   const [username, setUsername] = useState('');
@@ -20,31 +21,11 @@ export default function Register() {
     }
 
     try {
-      const res = await fetch("http://localhost:8080/auth/register", {
-        method: "POST",
-        credentials: "include",   
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          username,
-          password
-        })
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Register failed");
-        return;
-      }
-
-      // Success
+      await api.post("/auth/register", { username, password });
       navigate("/login");
-
     } catch (err) {
       console.error("Register error:", err);
-      setError("Network error");
+      setError(err.response?.data?.error || "Register failed");
     }
   };
 

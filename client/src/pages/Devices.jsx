@@ -1,11 +1,11 @@
-import axios from "axios";
 import { useEffect, useState } from "react";
+import api from "../api/api";
 
 const Devices = () => {
   const [devices, setDevices] = useState([]);
 
   useEffect(() => {
-    axios.get("http://localhost:8080/api/devices")
+    api.get("/devices")
       .then(res => setDevices(res.data))
       .catch(err => console.log(err));
   }, []);

@@ -5,21 +5,34 @@ services:
     build: ./server
     container_name: watchdog-backend
     ports:
+      # Required for browser API access until a reverse proxy is added.
       - "8080:8080"
     volumes:
       - watchdog_data:/app/data
     environment:
       - SQLITE_STORAGE=/app/data/dev.sqlite
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:5173}
+    networks:
+      - watchdog_net
     restart: unless-stopped
 
   frontend:
-    build: ./client
+    build:
+      context: ./client
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
     container_name: watchdog-frontend
     ports:
       - "5173:80"
     depends_on:
       - backend
+    networks:
+      - watchdog_net
     restart: unless-stopped
 
 volumes:
   watchdog_data:
+
+networks:
+  watchdog_net:
+    driver: bridge

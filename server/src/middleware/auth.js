@@ -32,8 +32,12 @@ async function attachUser(req, res, next) {
 }
 
 async function requireAuth(req, res, next) {
-  if (!req.user) return res.status(401).json({ error: "not authenticated" });
-  next();
+  if (req.user) return next();
+  if (req.session && req.session.user) {
+    req.user = req.session.user;
+    return next();
+  }
+  return res.status(401).json({ error: "not authenticated" });
 }
 
 function requireRole(role) {
