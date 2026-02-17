@@ -5,6 +5,11 @@ const authRoutes = require("./routes/auth");
 
 const app = express();
 
+const deviceRoutes = require("./routes/devices");
+const scanRoutes = require("./routes/scans");
+
+app.use("/api/devices", deviceRoutes);
+app.use("/api/scans", scanRoutes);
 
 app.use(cors({
   origin: "http://localhost:5173",
