@@ -1,31 +1,37 @@
 import React, { useState, useContext } from 'react';
 import { AuthContext } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import api from '../api/api';
 
 export default function Register() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const { user } = useContext(AuthContext);
+  const { user, register } = useContext(AuthContext);
   const navigate = useNavigate();
 
   const handleRegister = async () => {
     setError(null);
+    setSubmitting(true);
 
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
+      setSubmitting(false);
       return;
     }
 
     try {
-      await api.post("/auth/register", { username, password });
-      navigate("/login");
+      await register(username, password);
+      navigate("/login", {
+        replace: true,
+        state: { message: "Account created successfully. You can now log in." },
+      });
     } catch (err) {
-      console.error("Register error:", err);
       setError(err.response?.data?.error || "Register failed");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -64,9 +70,9 @@ export default function Register() {
 
       <button
         onClick={handleRegister}
-        disabled={user && user.role !== "admin"}
+        disabled={(user && user.role !== "admin") || submitting}
       >
-        Create Account
+        {submitting ? "Creating..." : "Create Account"}
       </button>
 
       {error && (

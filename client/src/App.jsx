@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
-import RequireAuth from "./components/RequireAuth";
+import { useContext } from "react";
+import ProtectedRoute from "./components/ProtectedRoute";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
@@ -7,24 +8,27 @@ import Devices from "./pages/Devices";
 import Scans from "./pages/Scans";
 import Sidebar from "./components/Sidebar";
 import Topbar from "./components/Topbar";
+import { AuthContext } from "./contexts/AuthContext";
 
 function AppLayout() {
   const location = useLocation();
+  const { user, loading } = useContext(AuthContext);
 
-  const hideSidebarRoutes = ["/login", "/register"];
-  const shouldHideSidebar = hideSidebarRoutes.includes(location.pathname);
+  const publicRoutes = ["/login", "/register"];
+  const isPublicRoute = publicRoutes.includes(location.pathname);
+  const showShell = !isPublicRoute && !loading && !!user;
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
       
-      {/* Sidebar (hidden on login/register) */}
-      {!shouldHideSidebar && <Sidebar />}
+      {/* Sidebar (only on authenticated pages) */}
+      {showShell && <Sidebar />}
 
       {/* Main area */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
         
-        {/* Top bar only on logged-in pages */}
-        {!shouldHideSidebar && <Topbar />}
+        {/* Top bar only on authenticated pages */}
+        {showShell && <Topbar />}
 
         {/* Page content (scrollable) */}
         <div style={{ flex: 1, overflowY: "auto", padding: "20px" }}>
@@ -35,27 +39,27 @@ function AppLayout() {
             <Route
               path="/"
               element={
-                <RequireAuth>
+                <ProtectedRoute>
                   <Dashboard />
-                </RequireAuth>
+                </ProtectedRoute>
               }
             />
 
             <Route
               path="/devices"
               element={
-                <RequireAuth>
+                <ProtectedRoute>
                   <Devices />
-                </RequireAuth>
+                </ProtectedRoute>
               }
             />
 
             <Route
               path="/scans"
               element={
-                <RequireAuth>
+                <ProtectedRoute>
                   <Scans />
-                </RequireAuth>
+                </ProtectedRoute>
               }
             />
           </Routes>
