@@ -227,16 +227,12 @@ services:
       - /bin/sh
       - -c
       - |
-        touch /var/log/openvas/ospd-openvas.log
         /usr/local/bin/ospd-openvas \
-          --daemon \
+          -f \
           -u /run/ospd/ospd-openvas.sock \
-          --log-file=/var/log/openvas/ospd-openvas.log \
-          --lock-file-dir=/run \
-          --socket-mode=0o770 \
+          -m 666 \
           --notus-feed-dir=/var/lib/notus/advisories \
           --openvasd-server=http://openvas-scanner:9390
-        tail -F /var/log/openvas/ospd-openvas.log
     mem_limit: 2g
     volumes:
       - openvas_vt_data:/var/lib/openvas/plugins
@@ -318,10 +314,11 @@ volumes:
   pg_socket:
   gvmd_data:
   gvmd_socket:
+    external: true
     name: watchdog-gvmd-socket
   ospd_socket:
 
 networks:
   watchdog-internal:
+    external: true
     name: watchdog-internal
-    driver: bridge
