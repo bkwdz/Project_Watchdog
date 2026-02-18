@@ -36,6 +36,7 @@ function getConfig() {
     socketPath: socketPath || null,
     useTls: !socketPath && (process.env.GREENBONE_TLS || 'true').toLowerCase() !== 'false',
     timeoutMs: Number(process.env.GREENBONE_TIMEOUT_MS || 20_000),
+    portRange: process.env.GREENBONE_PORT_RANGE || 'T:1-65535,U:1-65535',
     scanConfigId: process.env.GREENBONE_SCAN_CONFIG_ID || 'daba56c8-73ec-11df-a475-002264764cea',
     scannerId: process.env.GREENBONE_SCANNER_ID || '08b69003-5fc2-4037-a479-93b440211c73',
   };
@@ -557,6 +558,7 @@ async function startScan(target) {
         <create_target>
           <name>Watchdog-${xmlEscape(safeTarget)}-${suffix}</name>
           <hosts>${xmlEscape(safeTarget)}</hosts>
+          <port_range>${xmlEscape(config.portRange)}</port_range>
         </create_target>
       `,
     );
