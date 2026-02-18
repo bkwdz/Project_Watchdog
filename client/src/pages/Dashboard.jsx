@@ -141,8 +141,8 @@ export default function Dashboard() {
     () => [
       { key: 'critical', label: 'Critical', count: totals.criticalCount, color: '#ff5d5d' },
       { key: 'high', label: 'High', count: totals.highCount, color: '#ff8a80' },
-      { key: 'medium', label: 'Medium', count: totals.mediumCount, color: '#ffb454' },
-      { key: 'low', label: 'Low', count: totals.lowCount, color: '#f5c451' },
+      { key: 'medium', label: 'Medium', count: totals.mediumCount, color: '#ff8f43' },
+      { key: 'low', label: 'Low', count: totals.lowCount, color: '#5ad68a' },
     ],
     [totals],
   );
@@ -214,8 +214,12 @@ export default function Dashboard() {
   return (
     <div className="page-stack">
       <section className="stats-grid dashboard-stats-grid">
-        <StatCard label="Total Devices" value={totals.totalDevices} tone="neutral" />
-        <StatCard label="Online / Offline" value={`${totals.onlineDevices} / ${totals.offlineDevices}`} tone="info" />
+        <StatCard
+          label="Devices Online"
+          value={totals.onlineDevices}
+          secondary={`Offline: ${totals.offlineDevices}`}
+          tone="info"
+        />
         <StatCard label="Running Scans" value={totals.runningScans} tone="info" />
         <StatCard label="Queued Scans" value={totals.queuedScans} tone="warning" />
         <StatCard label="Failed Scans" value={totals.failedScans} tone="danger" />

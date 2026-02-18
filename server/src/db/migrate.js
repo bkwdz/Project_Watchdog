@@ -1,6 +1,7 @@
 const { query } = require('../db');
 const greenboneMigration = require('./migrations/002_greenbone');
 const deviceHealthMigration = require('./migrations/003_device_health');
+const deviceDisplayNameMigration = require('./migrations/004_device_display_name');
 
 const SCHEMA_STATEMENTS = [
   `
@@ -16,6 +17,7 @@ const SCHEMA_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS devices (
       id SERIAL PRIMARY KEY,
       ip_address INET NOT NULL UNIQUE,
+      display_name TEXT,
       hostname TEXT,
       mac_address TEXT,
       os_guess TEXT,
@@ -74,6 +76,7 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_vulnerabilities_scan_id ON vulnerabilities(scan_id);`,
   ...greenboneMigration,
   ...deviceHealthMigration,
+  ...deviceDisplayNameMigration,
 ];
 
 async function migrate() {

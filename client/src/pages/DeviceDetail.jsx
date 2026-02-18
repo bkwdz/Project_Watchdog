@@ -224,7 +224,7 @@ export default function DeviceDetail() {
       return;
     }
 
-    setHostnameDraft(device.hostname || '');
+    setHostnameDraft(device.display_name || device.displayName || '');
   }, [device, hostnameEditing]);
 
   const startProfileScan = async (scanType) => {
@@ -468,13 +468,13 @@ export default function DeviceDetail() {
         key: 'medium',
         label: 'Medium',
         value: deviceSnapshot.severityCounts.medium,
-        color: '#ffb454',
+        color: '#ff8f43',
       },
       {
         key: 'low',
         label: 'Low',
         value: deviceSnapshot.severityCounts.low,
-        color: '#f5c451',
+        color: '#5ad68a',
       },
     ],
     [deviceSnapshot.severityCounts],
@@ -485,10 +485,10 @@ export default function DeviceDetail() {
       return;
     }
 
-    const nextHostname = hostnameDraft.trim();
-    const currentHostname = String(device.hostname || '').trim();
+    const nextDisplayName = hostnameDraft.trim();
+    const currentDisplayName = String(device.display_name || device.displayName || '').trim();
 
-    if (nextHostname === currentHostname) {
+    if (nextDisplayName === currentDisplayName) {
       setHostnameEditing(false);
       return;
     }
@@ -496,7 +496,7 @@ export default function DeviceDetail() {
     setHostnameSaving(true);
 
     try {
-      const updated = await updateDevice(device.id, { hostname: nextHostname });
+      const updated = await updateDevice(device.id, { display_name: nextDisplayName });
       setDevice((prev) => {
         if (!prev) {
           return updated;
@@ -510,9 +510,9 @@ export default function DeviceDetail() {
         };
       });
       setHostnameEditing(false);
-      pushToast('Device hostname updated.', 'success');
+      pushToast('Device display name updated.', 'success');
     } catch (err) {
-      pushToast(err?.response?.data?.error || 'Unable to update device hostname.', 'error');
+      pushToast(err?.response?.data?.error || 'Unable to update device display name.', 'error');
     } finally {
       setHostnameSaving(false);
     }
@@ -527,17 +527,17 @@ export default function DeviceDetail() {
         {!loading && !error && device && (
           <>
             <div className="device-identity-row">
-              <div>
+              <div className="device-identity-main">
                 <p className="device-identity-label">Display Name</p>
                 <h4 className="device-identity-value">
-                  {device.hostname || device.name || device.ip_address || device.ip || '-'}
+                  {device.display_name || device.displayName || device.hostname || device.ip_address || device.ip || '-'}
                 </h4>
               </div>
               {!hostnameEditing && (
                 <button
                   type="button"
                   className="icon-button"
-                  aria-label="Edit device hostname"
+                  aria-label="Edit device display name"
                   onClick={() => setHostnameEditing(true)}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -553,11 +553,11 @@ export default function DeviceDetail() {
             {hostnameEditing && (
               <div className="hostname-edit-row">
                 <div className="field-stack hostname-field">
-                  <label htmlFor="hostname-edit-input">Hostname</label>
+                  <label htmlFor="hostname-edit-input">Display Name</label>
                   <input
                     id="hostname-edit-input"
                     type="text"
-                    placeholder="Set custom hostname (blank clears)"
+                    placeholder="Set custom display name (blank clears)"
                     value={hostnameDraft}
                     disabled={hostnameSaving}
                     onChange={(event) => setHostnameDraft(event.target.value)}
@@ -578,7 +578,7 @@ export default function DeviceDetail() {
                     disabled={hostnameSaving}
                     onClick={() => {
                       setHostnameEditing(false);
-                      setHostnameDraft(device.hostname || '');
+                      setHostnameDraft(device.display_name || device.displayName || '');
                     }}
                   >
                     Cancel
@@ -802,20 +802,29 @@ export default function DeviceDetail() {
           />
           {portRows.length > 10 && (
             <div className="table-expand-row">
-              <button
-                type="button"
-                className="small-button"
-                onClick={() => {
-                  if (hasMorePorts) {
-                    setPortsVisibleCount((current) => Math.min(current + 10, portRows.length));
-                    return;
-                  }
-
-                  setPortsVisibleCount(10);
-                }}
-              >
-                {hasMorePorts ? `Show More (${portRows.length - portsVisibleCount} remaining)` : 'Show Less'}
-              </button>
+              {hasMorePorts && (
+                <>
+                  <button
+                    type="button"
+                    className="small-button"
+                    onClick={() => setPortsVisibleCount((current) => Math.min(current + 10, portRows.length))}
+                  >
+                    Show More ({portRows.length - portsVisibleCount} remaining)
+                  </button>
+                  <button
+                    type="button"
+                    className="small-button"
+                    onClick={() => setPortsVisibleCount(portRows.length)}
+                  >
+                    Show All
+                  </button>
+                </>
+              )}
+              {!hasMorePorts && portsVisibleCount > 10 && (
+                <button type="button" className="small-button" onClick={() => setPortsVisibleCount(10)}>
+                  Show Less
+                </button>
+              )}
             </div>
           )}
         </Card>
@@ -834,22 +843,29 @@ export default function DeviceDetail() {
           />
           {vulnerabilityRows.length > 10 && (
             <div className="table-expand-row">
-              <button
-                type="button"
-                className="small-button"
-                onClick={() => {
-                  if (hasMoreVulnerabilities) {
-                    setVulnsVisibleCount((current) => Math.min(current + 10, vulnerabilityRows.length));
-                    return;
-                  }
-
-                  setVulnsVisibleCount(10);
-                }}
-              >
-                {hasMoreVulnerabilities
-                  ? `Show More (${vulnerabilityRows.length - vulnsVisibleCount} remaining)`
-                  : 'Show Less'}
-              </button>
+              {hasMoreVulnerabilities && (
+                <>
+                  <button
+                    type="button"
+                    className="small-button"
+                    onClick={() => setVulnsVisibleCount((current) => Math.min(current + 10, vulnerabilityRows.length))}
+                  >
+                    Show More ({vulnerabilityRows.length - vulnsVisibleCount} remaining)
+                  </button>
+                  <button
+                    type="button"
+                    className="small-button"
+                    onClick={() => setVulnsVisibleCount(vulnerabilityRows.length)}
+                  >
+                    Show All
+                  </button>
+                </>
+              )}
+              {!hasMoreVulnerabilities && vulnsVisibleCount > 10 && (
+                <button type="button" className="small-button" onClick={() => setVulnsVisibleCount(10)}>
+                  Show Less
+                </button>
+              )}
             </div>
           )}
         </Card>

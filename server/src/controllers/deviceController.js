@@ -1,12 +1,35 @@
 const { query } = require('../db');
 
-function normalizeHostname(hostname) {
-  if (typeof hostname !== 'string') {
+function normalizeOptionalText(value) {
+  if (typeof value !== 'string') {
     return null;
   }
 
-  const trimmed = hostname.trim();
+  const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function resolveRequestedDisplayName(body) {
+  if (!body || typeof body !== 'object') {
+    return { provided: false, value: null };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, 'display_name')) {
+    return {
+      provided: true,
+      value: normalizeOptionalText(body.display_name),
+    };
+  }
+
+  // Backward compatibility for clients still sending hostname in the edit form.
+  if (Object.prototype.hasOwnProperty.call(body, 'hostname')) {
+    return {
+      provided: true,
+      value: normalizeOptionalText(body.hostname),
+    };
+  }
+
+  return { provided: false, value: null };
 }
 
 exports.summary = async (req, res, next) => {
@@ -94,6 +117,7 @@ exports.list = async (req, res, next) => {
         SELECT
           d.id,
           d.ip_address,
+          d.display_name,
           d.hostname,
           d.mac_address,
           d.os_guess,
@@ -112,10 +136,11 @@ exports.list = async (req, res, next) => {
     const devices = result.rows.map((device) => ({
       ...device,
       ip: device.ip_address,
-      name: device.hostname,
+      name: device.display_name || device.hostname,
       mac: device.mac_address,
       online: Boolean(device.online_status),
       lastSeen: device.last_seen,
+      displayName: device.display_name,
     }));
 
     return res.json(devices);
@@ -134,7 +159,7 @@ exports.get = async (req, res, next) => {
 
     const deviceResult = await query(
       `
-        SELECT id, ip_address, hostname, mac_address, os_guess, online_status, last_healthcheck_at, first_seen, last_seen
+        SELECT id, ip_address, display_name, hostname, mac_address, os_guess, online_status, last_healthcheck_at, first_seen, last_seen
         FROM devices
         WHERE id = $1
         LIMIT 1
@@ -181,10 +206,11 @@ exports.get = async (req, res, next) => {
     return res.json({
       ...device,
       ip: device.ip_address,
-      name: device.hostname,
+      name: device.display_name || device.hostname,
       mac: device.mac_address,
       online: Boolean(device.online_status),
       lastSeen: device.last_seen,
+      displayName: device.display_name,
       ports: portsResult.rows,
       vulnerabilities: vulnerabilitiesResult.rows,
     });
@@ -201,20 +227,28 @@ exports.update = async (req, res, next) => {
       return res.status(400).json({ error: 'invalid device id' });
     }
 
-    if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'hostname')) {
-      return res.status(400).json({ error: 'hostname is required' });
+    const requestedDisplayName = resolveRequestedDisplayName(req.body);
+
+    if (!requestedDisplayName.provided) {
+      return res.status(400).json({ error: 'display_name is required' });
     }
 
-    const hostname = normalizeHostname(req.body.hostname);
+    const displayName = requestedDisplayName.value;
+    const shouldPopulateHostname = displayName !== null;
 
     const updateResult = await query(
       `
         UPDATE devices
-        SET hostname = $2
+        SET
+          display_name = $2,
+          hostname = CASE
+            WHEN $3::boolean = true AND (hostname IS NULL OR BTRIM(hostname) = '') THEN $2
+            ELSE hostname
+          END
         WHERE id = $1
-        RETURNING id, ip_address, hostname, mac_address, os_guess, online_status, last_healthcheck_at, first_seen, last_seen
+        RETURNING id, ip_address, display_name, hostname, mac_address, os_guess, online_status, last_healthcheck_at, first_seen, last_seen
       `,
-      [deviceId, hostname],
+      [deviceId, displayName, shouldPopulateHostname],
     );
 
     const updated = updateResult.rows[0];
@@ -226,10 +260,11 @@ exports.update = async (req, res, next) => {
     return res.json({
       ...updated,
       ip: updated.ip_address,
-      name: updated.hostname,
+      name: updated.display_name || updated.hostname,
       mac: updated.mac_address,
       online: Boolean(updated.online_status),
       lastSeen: updated.last_seen,
+      displayName: updated.display_name,
     });
   } catch (err) {
     return next(err);

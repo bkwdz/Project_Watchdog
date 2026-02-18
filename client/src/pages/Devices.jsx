@@ -226,7 +226,7 @@ export default function Devices() {
                   onClick={() => navigate(`/devices/${device.id}`)}
                 >
                   <div className="device-card-header">
-                    <h3>{device.hostname || device.ip_address || device.ip || 'Unknown Device'}</h3>
+                    <h3>{device.display_name || device.displayName || device.hostname || device.ip_address || device.ip || 'Unknown Device'}</h3>
                     <span className={`risk-pill ${risk.className}`}>{risk.label}</span>
                   </div>
 
