@@ -1,7 +1,9 @@
 const express = require("express");
 const session = require("express-session");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const authRoutes = require("./routes/auth");
+const { attachUser } = require("./middleware/auth");
 
 const app = express();
 
@@ -26,6 +28,7 @@ app.use(
 );
 
 app.use(express.json());
+app.use(cookieParser());
 
 app.use(session({
   secret: process.env.SESSION_SECRET || "dev_secret",
@@ -38,6 +41,7 @@ app.use(session({
   }
 }));
 
+app.use(attachUser);
 
 app.use("/api/auth", authRoutes);
 app.use("/api/devices", deviceRoutes);

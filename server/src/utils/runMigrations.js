@@ -1,11 +1,12 @@
-const { sequelize } = require('../models');
+require('dotenv').config();
+const { waitForDatabase } = require('../db');
+const { migrate } = require('../db/migrate');
 
 async function run() {
   try {
-    await sequelize.authenticate();
-    console.log('DB OK, syncing...');
-    await sequelize.sync({ alter: true });
-    console.log('Sync complete');
+    await waitForDatabase();
+    await migrate();
+    console.log('Schema migration complete');
     process.exit(0);
   } catch (err) {
     console.error('Migration error', err);

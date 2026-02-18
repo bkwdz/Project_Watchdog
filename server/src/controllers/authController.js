@@ -1,11 +1,7 @@
-const { User } = require("../models");
 const bcrypt = require("bcrypt");
+const { query } = require("../db");
 
 module.exports = {
-
-  // ---------------------------------------------------------
-  // REGISTER
-  // ---------------------------------------------------------
   register: async (req, res) => {
     try {
       const { username, password } = req.body;
@@ -14,58 +10,65 @@ module.exports = {
         return res.status(400).json({ error: "Missing fields" });
       }
 
-      // Count existing users
-      const userCount = await User.count();
+      const countResult = await query("SELECT COUNT(*)::int AS count FROM users");
+      const userCount = countResult.rows[0].count;
 
-      // First user becomes admin automatically
       const role = userCount === 0 ? "admin" : "user";
 
-      // Non-admin users cannot create additional accounts
       if (userCount > 0) {
         if (!req.session.user || req.session.user.role !== "admin") {
           return res.status(403).json({ error: "Admin required" });
         }
       }
 
-      const hash = await bcrypt.hash(password, 10);
+      const passwordHash = await bcrypt.hash(password, 10);
 
-      const newUser = await User.create({
-        username,
-        passwordHash: hash,
-        role
-      });
+      const insertResult = await query(
+        `
+          INSERT INTO users (username, password_hash, role)
+          VALUES ($1, $2, $3)
+          RETURNING id, role
+        `,
+        [username, passwordHash, role],
+      );
 
-      return res.json({ success: true, id: newUser.id, role });
-
+      const newUser = insertResult.rows[0];
+      return res.json({ success: true, id: newUser.id, role: newUser.role });
     } catch (err) {
+      if (err.code === "23505") {
+        return res.status(409).json({ error: "Username already exists" });
+      }
+
       console.error("Register error:", err);
       return res.status(500).json({ error: "Server error" });
     }
   },
 
-  // ---------------------------------------------------------
-  // LOGIN
-  // ---------------------------------------------------------
   login: async (req, res) => {
     try {
-      // 🔥 Log login request body
-      console.log("LOGIN BODY:", req.body);
-
       const { username, password } = req.body;
 
-      const user = await User.findOne({ where: { username } });
+      if (!username || !password) {
+        return res.status(400).json({ error: "Missing fields" });
+      }
 
-      // 🔥 Log whether user exists
-      console.log("FOUND USER:", user);
+      const userResult = await query(
+        `
+          SELECT id, username, password_hash, role
+          FROM users
+          WHERE username = $1
+          LIMIT 1
+        `,
+        [username],
+      );
+
+      const user = userResult.rows[0];
 
       if (!user) {
         return res.status(400).json({ error: "Invalid login" });
       }
 
-      const match = await bcrypt.compare(password, user.passwordHash);
-
-      // password log
-      console.log("PASSWORD MATCH:", match);
+      const match = await bcrypt.compare(password, user.password_hash);
 
       if (!match) {
         return res.status(400).json({ error: "Invalid login" });
@@ -74,33 +77,27 @@ module.exports = {
       req.session.user = {
         id: user.id,
         username: user.username,
-        role: user.role
+        role: user.role,
       };
 
       return res.json({ success: true, user: req.session.user });
-
     } catch (err) {
       console.error("Login error:", err);
       return res.status(500).json({ error: "Server error" });
     }
   },
 
-  
-  // LOGOUT
-  
   logout: (req, res) => {
     req.session.destroy(() => {
       res.json({ success: true });
     });
   },
 
-  
-  // /auth/me
- 
   me: (req, res) => {
     if (!req.session.user) {
       return res.status(401).json({ error: "Not logged in" });
     }
-    res.json(req.session.user);
-  }
+
+    return res.json(req.session.user);
+  },
 };

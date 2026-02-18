@@ -1,21 +1,17 @@
 require('dotenv').config();
 const app = require('./app');
-const { sequelize } = require('./models');
+const { waitForDatabase } = require('./db');
+const { migrate } = require('./db/migrate');
+const { resumeQueuedScans } = require('./services/scanWorker');
 
 const PORT = process.env.PORT || 8080;
 
 async function start() {
   try {
-    await sequelize.authenticate();
-    console.log('DB connection OK');
-
-    // Sync DB (safe for dev). Remove or change in production.
-    await sequelize.sync({ alter: true });
-
-    if (process.env.ENABLE_SCHEDULER === 'true') {
-      const { startScheduledJobs } = require('./utils/scheduler');
-      startScheduledJobs();
-    }
+    await waitForDatabase();
+    await migrate();
+    await resumeQueuedScans();
+    console.log('Database connection OK');
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
