@@ -471,6 +471,19 @@ select:focus {
   gap: 10px;
 }
 
+.vuln-action-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.vuln-profile-select {
+  min-width: 260px;
+  max-width: 380px;
+  flex: 1 1 260px;
+}
+
 .progress-track {
   position: relative;
   width: 100%;
@@ -768,6 +781,16 @@ select:focus {
 
   .inline-form-action {
     min-width: 0;
+  }
+
+  .vuln-action-inline {
+    width: 100%;
+  }
+
+  .vuln-profile-select {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
   }
 }
 

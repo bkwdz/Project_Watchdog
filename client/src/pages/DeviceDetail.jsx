@@ -390,23 +390,6 @@ export default function DeviceDetail() {
       </Card>
 
       <Card title="Actions" subtitle="Start targeted discovery and vulnerability scans for this host.">
-        <div className="field-stack">
-          <label htmlFor="vuln-config-select">Vulnerability Scan Profile</label>
-          <select
-            id="vuln-config-select"
-            value={vulnConfigId}
-            disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || vulnTriggering || loading || !device}
-            onChange={(event) => setVulnConfigId(event.target.value)}
-          >
-            {vulnConfigs.length === 0 && <option value="">No scan profiles available</option>}
-            {vulnConfigs.map((config) => (
-              <option key={config.id} value={config.id}>
-                {config.name || config.id}
-              </option>
-            ))}
-          </select>
-        </div>
-
         <div className="button-row">
           {['quick', 'standard', 'aggressive', 'full'].map((scanType) => (
             <button
@@ -420,15 +403,33 @@ export default function DeviceDetail() {
             </button>
           ))}
 
-          <button
-            type="button"
-            className="danger-button"
-            disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || !vulnConfigId || vulnTriggering || loading || !device}
-            title={vulnEnabled ? 'Run Greenbone vulnerability scan' : 'Vulnerability scanner not enabled'}
-            onClick={startVulnScan}
-          >
-            {vulnTriggering ? 'Starting...' : 'Vulnerability Scan'}
-          </button>
+          <div className="vuln-action-inline">
+            <button
+              type="button"
+              className="danger-button"
+              disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || !vulnConfigId || vulnTriggering || loading || !device}
+              title={vulnEnabled ? 'Run Greenbone vulnerability scan' : 'Vulnerability scanner not enabled'}
+              onClick={startVulnScan}
+            >
+              {vulnTriggering ? 'Starting...' : 'Vulnerability Scan'}
+            </button>
+
+            <select
+              id="vuln-config-select"
+              className="vuln-profile-select"
+              aria-label="Vulnerability Scan Profile"
+              value={vulnConfigId}
+              disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || vulnTriggering || loading || !device}
+              onChange={(event) => setVulnConfigId(event.target.value)}
+            >
+              {vulnConfigs.length === 0 && <option value="">No scan profiles available</option>}
+              {vulnConfigs.map((config) => (
+                <option key={config.id} value={config.id}>
+                  {config.name || config.id}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {!vulnConfigsLoaded && vulnEnabled && <p className="muted">Loading vulnerability scan profiles...</p>}
