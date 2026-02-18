@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:15
@@ -37,7 +35,7 @@ services:
     restart: unless-stopped
 
   greenbone:
-    image: greenbone/community-edition
+    image: greenbone/community-container
     profiles: ["vuln"]
     networks:
       - watchdog_net
