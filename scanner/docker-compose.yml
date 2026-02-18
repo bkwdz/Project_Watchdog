@@ -2,10 +2,10 @@ name: watchdog-scanner
 
 services:
   vulnerability-tests:
-    image: registry.community.greenbone.net/community/vulnerability-tests:24.10
+    image: registry.community.greenbone.net/community/vulnerability-tests:latest
     environment:
-      FEED_RELEASE: "24.10"
       KEEP_ALIVE: "1"
+    mem_limit: 768m
     volumes:
       - openvas_vt_data:/mnt
     healthcheck:
@@ -19,10 +19,10 @@ services:
     restart: unless-stopped
 
   notus-data:
-    image: registry.community.greenbone.net/community/notus-data:24.10
+    image: registry.community.greenbone.net/community/notus-data:latest
     environment:
-      FEED_RELEASE: "24.10"
       KEEP_ALIVE: "1"
+    mem_limit: 768m
     volumes:
       - notus_data:/mnt
     healthcheck:
@@ -35,8 +35,8 @@ services:
       - watchdog-internal
     restart: unless-stopped
 
-  redis:
-    image: registry.community.greenbone.net/community/redis-server:24.10
+  redis-server:
+    image: registry.community.greenbone.net/community/redis-server:latest
     command:
       - redis-server
       - --save
@@ -50,6 +50,7 @@ services:
       - /run/redis/redis.sock
       - --unixsocketperm
       - "770"
+    mem_limit: 512m
     volumes:
       - redis_data:/data
       - redis_socket:/run/redis
@@ -64,11 +65,12 @@ services:
     restart: unless-stopped
 
   openvas-scanner:
-    image: registry.community.greenbone.net/community/openvas-scanner:24.10
+    image: registry.community.greenbone.net/community/openvas-scanner:latest
     environment:
       OPENVASD_MODE: service_notus
       LISTENING: 0.0.0.0:9390
       OPENVASD_LOG: /var/log/openvas/openvasd.log
+    mem_limit: 3g
     command:
       - /bin/sh
       - -c
@@ -80,7 +82,10 @@ services:
       - openvas_vt_data:/var/lib/openvas/plugins
       - notus_data:/var/lib/notus
       - openvas_logs:/var/log/openvas
+      - redis_socket:/run/redis
     depends_on:
+      redis-server:
+        condition: service_healthy
       vulnerability-tests:
         condition: service_healthy
       notus-data:
@@ -96,7 +101,7 @@ services:
     restart: unless-stopped
 
   ospd-openvas:
-    image: registry.community.greenbone.net/community/ospd-openvas:24.10
+    image: registry.community.greenbone.net/community/ospd-openvas:latest
     hostname: ospd-openvas.local
     cap_add:
       - NET_ADMIN
@@ -119,14 +124,14 @@ services:
           --notus-feed-dir=/var/lib/notus/advisories \
           --openvasd-server=http://openvas-scanner:9390
         tail -F /var/log/openvas/ospd-openvas.log
+    mem_limit: 2g
     volumes:
       - openvas_vt_data:/var/lib/openvas/plugins
       - notus_data:/var/lib/notus
       - openvas_logs:/var/log/openvas
       - redis_socket:/run/redis
-      - ospd_socket:/run/ospd
     depends_on:
-      redis:
+      redis-server:
         condition: service_healthy
       openvas-scanner:
         condition: service_healthy
@@ -150,9 +155,8 @@ volumes:
   openvas_logs:
   redis_data:
   redis_socket:
-  ospd_socket:
 
 networks:
   watchdog-internal:
-    external: true
     name: watchdog-internal
+    driver: bridge

@@ -9,6 +9,7 @@ const app = express();
 
 const deviceRoutes = require("./routes/devices");
 const scanRoutes = require("./routes/scans");
+const scannerRoutes = require("./routes/scanner");
 
 const corsOrigin = process.env.CORS_ORIGIN;
 const parsedCorsOrigins = corsOrigin
@@ -46,5 +47,6 @@ app.use(attachUser);
 app.use("/api/auth", authRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/scans", scanRoutes);
+app.use("/api/scanner", scannerRoutes);
 
 module.exports = app;
