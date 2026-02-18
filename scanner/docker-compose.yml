@@ -128,19 +128,6 @@ services:
 
   redis-server:
     image: registry.community.greenbone.net/community/redis-server:latest
-    command:
-      - redis-server
-      - --save
-      - "900"
-      - "1"
-      - --appendonly
-      - "yes"
-      - --dir
-      - /data
-      - --unixsocket
-      - /run/redis/redis.sock
-      - --unixsocketperm
-      - "770"
     mem_limit: 512m
     volumes:
       - redis_data:/data
