@@ -28,10 +28,13 @@ services:
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost}
       - SESSION_SECRET=${SESSION_SECRET:-dev_secret}
       - GREENBONE_ENABLED=${GREENBONE_ENABLED:-true}
-      - GREENBONE_HOST=${GREENBONE_HOST:-openvas-scanner}
+      - GREENBONE_HOST=${GREENBONE_HOST:-gvmd}
       - GREENBONE_PORT=${GREENBONE_PORT:-9390}
       - GREENBONE_TLS=${GREENBONE_TLS:-false}
+      - GREENBONE_SOCKET_PATH=${GREENBONE_SOCKET_PATH:-/run/gvmd/gvmd.sock}
       - GREENBONE_TIMEOUT_MS=${GREENBONE_TIMEOUT_MS:-60000}
+    volumes:
+      - gvmd_socket:/run/gvmd
     networks:
       - watchdog_net
       - watchdog-internal
@@ -53,6 +56,8 @@ services:
 
 volumes:
   postgres_data:
+  gvmd_socket:
+    name: watchdog-gvmd-socket
 
 networks:
   watchdog_net:

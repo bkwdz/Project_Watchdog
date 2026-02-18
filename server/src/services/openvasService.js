@@ -11,19 +11,26 @@ function toPositiveInt(value, fallback) {
 }
 
 function getScannerConfig() {
+  const socketPath = String(process.env.GREENBONE_SOCKET_PATH || '').trim();
+
   return {
     host: process.env.GREENBONE_HOST || 'openvas-scanner',
     port: toPositiveInt(process.env.GREENBONE_PORT, 9390),
+    socketPath: socketPath || null,
     timeoutMs: toPositiveInt(process.env.GREENBONE_TIMEOUT_MS, 60_000),
   };
 }
 
 function sendOspdCommand(commandXml, config) {
   return new Promise((resolve, reject) => {
-    const socket = net.connect({
-      host: config.host,
-      port: config.port,
-    });
+    const socket = net.connect(
+      config.socketPath
+        ? { path: config.socketPath }
+        : {
+          host: config.host,
+          port: config.port,
+        },
+    );
 
     let buffer = '';
     let settled = false;

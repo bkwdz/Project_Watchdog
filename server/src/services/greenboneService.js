@@ -26,12 +26,15 @@ function ensureEnabled() {
 }
 
 function getConfig() {
+  const socketPath = String(process.env.GREENBONE_SOCKET_PATH || '').trim();
+
   return {
     host: process.env.GREENBONE_HOST || 'greenbone',
     port: Number(process.env.GREENBONE_PORT || 9390),
     username: process.env.GREENBONE_USERNAME || 'admin',
     password: process.env.GREENBONE_PASSWORD || 'admin',
-    useTls: (process.env.GREENBONE_TLS || 'true').toLowerCase() !== 'false',
+    socketPath: socketPath || null,
+    useTls: !socketPath && (process.env.GREENBONE_TLS || 'true').toLowerCase() !== 'false',
     timeoutMs: Number(process.env.GREENBONE_TIMEOUT_MS || 20_000),
     scanConfigId: process.env.GREENBONE_SCAN_CONFIG_ID || 'daba56c8-73ec-11df-a475-002264764cea',
     scannerId: process.env.GREENBONE_SCANNER_ID || '08b69003-5fc2-4037-a479-93b440211c73',
@@ -256,13 +259,18 @@ function ensureSuccessResponse(rootName, rootNode) {
 
 function connectSocket(config) {
   return new Promise((resolve, reject) => {
-    const options = {
-      host: config.host,
-      port: config.port,
-      rejectUnauthorized: false,
-    };
-
-    const socket = config.useTls ? tls.connect(options) : net.connect(options);
+    const socket = config.socketPath
+      ? net.connect({ path: config.socketPath })
+      : config.useTls
+        ? tls.connect({
+          host: config.host,
+          port: config.port,
+          rejectUnauthorized: false,
+        })
+        : net.connect({
+          host: config.host,
+          port: config.port,
+        });
 
     const onError = (error) => {
       socket.destroy();
@@ -283,7 +291,7 @@ function connectSocket(config) {
 
     socket.once('error', onError);
 
-    const readyEvent = config.useTls ? 'secureConnect' : 'connect';
+    const readyEvent = config.socketPath || !config.useTls ? 'connect' : 'secureConnect';
 
     socket.once(readyEvent, () => {
       socket.removeListener('error', onError);
