@@ -30,12 +30,23 @@ export async function getScansList() {
   return response.data;
 }
 
-export async function createVulnerabilityScan(target) {
-  const response = await api.post('/scans/vuln', { target });
+export async function createVulnerabilityScan(target, scanConfigId = '') {
+  const payload = { target };
+
+  if (scanConfigId) {
+    payload.scan_config_id = scanConfigId;
+  }
+
+  const response = await api.post('/scans/vuln', payload);
   return response.data;
 }
 
 export async function getVulnerabilityScannerStatus() {
   const response = await api.get('/scans/vuln/status');
+  return response.data;
+}
+
+export async function getVulnerabilityScanConfigs() {
+  const response = await api.get('/scans/vuln/configs');
   return response.data;
 }

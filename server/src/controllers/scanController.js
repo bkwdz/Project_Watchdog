@@ -5,6 +5,7 @@ const {
   GreenboneServiceError,
   getConfig: getGreenboneConfig,
   isGreenboneEnabled,
+  listScanConfigs: listGreenboneScanConfigs,
   startScan: startGreenboneScan,
   getTaskStatus,
   fetchAndParseReport,
@@ -467,6 +468,9 @@ exports.createVulnerabilityScan = async (req, res, next) => {
     }
 
     const target = normalizeTarget(req.body.target);
+    const scanConfigId = typeof req.body.scan_config_id === 'string'
+      ? req.body.scan_config_id.trim()
+      : '';
 
     if (!isValidIPv4(target)) {
       return res.status(400).json({ error: 'target must be a valid IPv4 address' });
@@ -484,7 +488,9 @@ exports.createVulnerabilityScan = async (req, res, next) => {
     const queuedScan = queuedResult.rows[0];
 
     try {
-      const job = await startGreenboneScan(target);
+      const job = await startGreenboneScan(target, {
+        scanConfigId: scanConfigId || undefined,
+      });
 
       const runningScan = await updateScan(queuedScan.id, {
         status: 'running',
@@ -505,6 +511,23 @@ exports.createVulnerabilityScan = async (req, res, next) => {
     }
   } catch (err) {
     return next(err);
+  }
+};
+
+exports.getVulnerabilityScanConfigs = async (req, res) => {
+  if (!isGreenboneEnabled()) {
+    return res.status(503).json({ error: GREENBONE_DISABLED_MESSAGE });
+  }
+
+  try {
+    const { configs, defaultScanConfigId } = await listGreenboneScanConfigs();
+    return res.json({
+      configs,
+      default_scan_config_id: defaultScanConfigId,
+    });
+  } catch (error) {
+    const mappedError = toControllerError(error, 'Unable to load vulnerability scan configurations');
+    return res.status(mappedError.statusCode).json(mappedError.payload);
   }
 };
 

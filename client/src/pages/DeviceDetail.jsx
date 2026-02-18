@@ -5,6 +5,7 @@ import {
   createVulnerabilityScan,
   getDeviceById,
   getScanById,
+  getVulnerabilityScanConfigs,
   getVulnerabilityScannerStatus,
 } from '../api/endpoints';
 import Card from '../components/Card';
@@ -66,6 +67,9 @@ export default function DeviceDetail() {
   const [vulnStatusLoaded, setVulnStatusLoaded] = useState(false);
   const [vulnTriggering, setVulnTriggering] = useState(false);
   const [vulnStatusMessage, setVulnStatusMessage] = useState('');
+  const [vulnConfigs, setVulnConfigs] = useState([]);
+  const [vulnConfigId, setVulnConfigId] = useState('');
+  const [vulnConfigsLoaded, setVulnConfigsLoaded] = useState(false);
 
   const {
     scans,
@@ -109,10 +113,54 @@ export default function DeviceDetail() {
     }
   }, []);
 
+  const loadVulnerabilityConfigs = useCallback(async () => {
+    setVulnConfigsLoaded(false);
+
+    try {
+      const data = await getVulnerabilityScanConfigs();
+      const configs = Array.isArray(data?.configs) ? data.configs : [];
+      const defaultConfigId = String(data?.default_scan_config_id || '').trim();
+
+      setVulnConfigs(configs);
+
+      if (configs.length === 0) {
+        setVulnConfigId('');
+        setVulnStatusMessage('No vulnerability scan configurations are available in Greenbone yet.');
+      } else {
+        const selectedId = defaultConfigId && configs.some((config) => config.id === defaultConfigId)
+          ? defaultConfigId
+          : configs[0].id;
+        setVulnConfigId(selectedId);
+        setVulnStatusMessage('');
+      }
+    } catch (err) {
+      setVulnConfigs([]);
+      setVulnConfigId('');
+      setVulnStatusMessage(err?.response?.data?.error || 'Unable to load vulnerability scan configurations.');
+    } finally {
+      setVulnConfigsLoaded(true);
+    }
+  }, []);
+
   useEffect(() => {
     void loadDevice();
     void loadVulnerabilityStatus();
   }, [loadDevice, loadVulnerabilityStatus]);
+
+  useEffect(() => {
+    if (!vulnStatusLoaded) {
+      return;
+    }
+
+    if (!vulnEnabled) {
+      setVulnConfigs([]);
+      setVulnConfigId('');
+      setVulnConfigsLoaded(true);
+      return;
+    }
+
+    void loadVulnerabilityConfigs();
+  }, [loadVulnerabilityConfigs, vulnEnabled, vulnStatusLoaded]);
 
   useEffect(() => {
     if (!activeScan?.id) {
@@ -175,10 +223,15 @@ export default function DeviceDetail() {
       return;
     }
 
+    if (!vulnConfigId) {
+      pushToast('No vulnerability scan configuration is available yet.', 'error');
+      return;
+    }
+
     setVulnTriggering(true);
 
     try {
-      const scan = await createVulnerabilityScan(targetIp);
+      const scan = await createVulnerabilityScan(targetIp, vulnConfigId);
       registerScan(scan);
       pushToast(`Vulnerability scan #${scan.id} started.`, 'success');
       window.dispatchEvent(new CustomEvent('watchdog:scan-created', { detail: scan }));
@@ -337,6 +390,23 @@ export default function DeviceDetail() {
       </Card>
 
       <Card title="Actions" subtitle="Start targeted discovery and vulnerability scans for this host.">
+        <div className="field-stack">
+          <label htmlFor="vuln-config-select">Vulnerability Scan Profile</label>
+          <select
+            id="vuln-config-select"
+            value={vulnConfigId}
+            disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || vulnTriggering || loading || !device}
+            onChange={(event) => setVulnConfigId(event.target.value)}
+          >
+            {vulnConfigs.length === 0 && <option value="">No scan profiles available</option>}
+            {vulnConfigs.map((config) => (
+              <option key={config.id} value={config.id}>
+                {config.name || config.id}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <div className="button-row">
           {['quick', 'standard', 'aggressive', 'full'].map((scanType) => (
             <button
@@ -353,7 +423,7 @@ export default function DeviceDetail() {
           <button
             type="button"
             className="danger-button"
-            disabled={!vulnEnabled || !vulnStatusLoaded || vulnTriggering || loading || !device}
+            disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || !vulnConfigId || vulnTriggering || loading || !device}
             title={vulnEnabled ? 'Run Greenbone vulnerability scan' : 'Vulnerability scanner not enabled'}
             onClick={startVulnScan}
           >
@@ -361,7 +431,8 @@ export default function DeviceDetail() {
           </button>
         </div>
 
-        {!vulnEnabled && vulnStatusLoaded && <p className="warning-text">{vulnStatusMessage || 'Vulnerability scanner is not active.'}</p>}
+        {!vulnConfigsLoaded && vulnEnabled && <p className="muted">Loading vulnerability scan profiles...</p>}
+        {vulnStatusLoaded && vulnStatusMessage && <p className="warning-text">{vulnStatusMessage}</p>}
 
         {activeScan && (
           <div className="scan-inline-status">

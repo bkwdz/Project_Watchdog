@@ -216,27 +216,29 @@ function normalizeName(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-async function resolveScanConfigId(socket, requestedId) {
-  const response = await sendGmpCommand(
-    socket,
-    '<get_configs details="0" ignore_pagination="1" />',
-  );
+function normalizeScanConfigEntries(configNodes) {
+  const seen = new Set();
+  const entries = [];
 
-  const configs = collectNodesByKey(response.rootNode, 'config', []);
-  const entries = configs
-    .map((configNode) => ({
-      id: configNode?.$?.id || null,
-      name: extractText(configNode?.name),
-    }))
-    .filter((entry) => entry.id);
+  configNodes.forEach((configNode) => {
+    const id = configNode?.$?.id || null;
 
-  if (entries.length === 0) {
-    throw new GreenboneServiceError('No scan configurations are available in the vulnerability manager', {
-      statusCode: 502,
-      code: 'GREENBONE_CONFIG_NOT_FOUND',
+    if (!id || seen.has(id)) {
+      return;
+    }
+
+    seen.add(id);
+    entries.push({
+      id,
+      name: extractText(configNode?.name) || id,
+      comment: extractText(configNode?.comment) || '',
     });
-  }
+  });
 
+  return entries.sort((left, right) => normalizeName(left.name).localeCompare(normalizeName(right.name)));
+}
+
+function selectScanConfigId(entries, requestedId) {
   if (requestedId) {
     const requested = entries.find((entry) => entry.id === requestedId);
 
@@ -261,7 +263,30 @@ async function resolveScanConfigId(socket, requestedId) {
     }
   }
 
-  return entries[0].id;
+  return entries[0]?.id || null;
+}
+
+async function fetchScanConfigEntries(socket) {
+  const response = await sendGmpCommand(
+    socket,
+    '<get_configs details="1" ignore_pagination="1" />',
+  );
+
+  const configs = collectNodesByKey(response.rootNode, 'config', []);
+  return normalizeScanConfigEntries(configs);
+}
+
+async function resolveScanConfigId(socket, requestedId) {
+  const entries = await fetchScanConfigEntries(socket);
+
+  if (entries.length === 0) {
+    throw new GreenboneServiceError('No scan configurations are available in the vulnerability manager', {
+      statusCode: 502,
+      code: 'GREENBONE_CONFIG_NOT_FOUND',
+    });
+  }
+
+  return selectScanConfigId(entries, requestedId);
 }
 
 async function resolveScannerId(socket, requestedId) {
@@ -557,6 +582,17 @@ async function withAuthenticatedSession(work) {
   }
 }
 
+async function listScanConfigs() {
+  return withAuthenticatedSession(async (socket, config) => {
+    const entries = await fetchScanConfigEntries(socket);
+
+    return {
+      configs: entries,
+      defaultScanConfigId: selectScanConfigId(entries, config.scanConfigId),
+    };
+  });
+}
+
 function extractResponseId(response) {
   return response?.rootNode?.$?.id || null;
 }
@@ -654,10 +690,11 @@ function parseReportVulnerabilities(rootNode) {
   });
 }
 
-async function startScan(target) {
+async function startScan(target, options = {}) {
   ensureEnabled();
 
   const safeTarget = String(target || '').trim();
+  const requestedScanConfigId = String(options.scanConfigId || '').trim() || null;
 
   if (!safeTarget) {
     throw new GreenboneServiceError('Target is required', {
@@ -668,7 +705,7 @@ async function startScan(target) {
 
   return withAuthenticatedSession(async (socket, config) => {
     const suffix = Date.now();
-    const resolvedConfigId = await resolveScanConfigId(socket, config.scanConfigId);
+    const resolvedConfigId = await resolveScanConfigId(socket, requestedScanConfigId || config.scanConfigId);
     const resolvedScannerId = await resolveScannerId(socket, config.scannerId);
 
     const createTargetResponse = await sendGmpCommand(
@@ -810,6 +847,7 @@ module.exports = {
   GreenboneServiceError,
   isGreenboneEnabled,
   getConfig,
+  listScanConfigs,
   startScan,
   getTaskStatus,
   fetchAndParseReport,
