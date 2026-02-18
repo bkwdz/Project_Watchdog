@@ -216,6 +216,14 @@ function normalizeName(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+const PRIMARY_SCAN_CONFIG_ORDER = [
+  'full and fast',
+  'full and fast ultimate',
+  'discovery',
+  'host discovery',
+  'system discovery',
+];
+
 function normalizeScanConfigEntries(configNodes) {
   const seen = new Set();
   const entries = [];
@@ -236,6 +244,28 @@ function normalizeScanConfigEntries(configNodes) {
   });
 
   return entries.sort((left, right) => normalizeName(left.name).localeCompare(normalizeName(right.name)));
+}
+
+function selectPrimaryScanConfigs(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return [];
+  }
+
+  const byName = new Map();
+
+  entries.forEach((entry) => {
+    const key = normalizeName(entry.name);
+
+    if (!byName.has(key)) {
+      byName.set(key, entry);
+    }
+  });
+
+  const primary = PRIMARY_SCAN_CONFIG_ORDER
+    .map((name) => byName.get(name))
+    .filter(Boolean);
+
+  return primary.length > 0 ? primary : entries;
 }
 
 function selectScanConfigId(entries, requestedId) {
@@ -584,7 +614,7 @@ async function withAuthenticatedSession(work) {
 
 async function listScanConfigs() {
   return withAuthenticatedSession(async (socket, config) => {
-    const entries = await fetchScanConfigEntries(socket);
+    const entries = selectPrimaryScanConfigs(await fetchScanConfigEntries(socket));
 
     return {
       configs: entries,
