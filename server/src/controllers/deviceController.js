@@ -1,11 +1,22 @@
 const { query } = require('../db');
 
+function normalizeHostname(hostname) {
+  if (typeof hostname !== 'string') {
+    return null;
+  }
+
+  const trimmed = hostname.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 exports.summary = async (req, res, next) => {
   try {
     const totalsResult = await query(
       `
         SELECT
           (SELECT COUNT(*)::int FROM devices) AS total_devices,
+          (SELECT COUNT(*)::int FROM devices WHERE online_status = true) AS online_devices,
+          (SELECT COUNT(*)::int FROM devices WHERE online_status = false) AS offline_devices,
           (SELECT COUNT(*)::int FROM scans) AS total_scans,
           (SELECT COUNT(*)::int FROM scans WHERE status = 'running') AS running_scans,
           (SELECT COUNT(*)::int FROM scans WHERE status = 'queued') AS queued_scans,
@@ -86,6 +97,8 @@ exports.list = async (req, res, next) => {
           d.hostname,
           d.mac_address,
           d.os_guess,
+          d.online_status,
+          d.last_healthcheck_at,
           d.first_seen,
           d.last_seen,
           COALESCE(COUNT(p.id) FILTER (WHERE p.state = 'open'), 0)::int AS open_ports
@@ -101,6 +114,7 @@ exports.list = async (req, res, next) => {
       ip: device.ip_address,
       name: device.hostname,
       mac: device.mac_address,
+      online: Boolean(device.online_status),
       lastSeen: device.last_seen,
     }));
 
@@ -120,7 +134,7 @@ exports.get = async (req, res, next) => {
 
     const deviceResult = await query(
       `
-        SELECT id, ip_address, hostname, mac_address, os_guess, first_seen, last_seen
+        SELECT id, ip_address, hostname, mac_address, os_guess, online_status, last_healthcheck_at, first_seen, last_seen
         FROM devices
         WHERE id = $1
         LIMIT 1
@@ -169,9 +183,53 @@ exports.get = async (req, res, next) => {
       ip: device.ip_address,
       name: device.hostname,
       mac: device.mac_address,
+      online: Boolean(device.online_status),
       lastSeen: device.last_seen,
       ports: portsResult.rows,
       vulnerabilities: vulnerabilitiesResult.rows,
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+exports.update = async (req, res, next) => {
+  try {
+    const deviceId = Number(req.params.id);
+
+    if (!Number.isInteger(deviceId)) {
+      return res.status(400).json({ error: 'invalid device id' });
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'hostname')) {
+      return res.status(400).json({ error: 'hostname is required' });
+    }
+
+    const hostname = normalizeHostname(req.body.hostname);
+
+    const updateResult = await query(
+      `
+        UPDATE devices
+        SET hostname = $2
+        WHERE id = $1
+        RETURNING id, ip_address, hostname, mac_address, os_guess, online_status, last_healthcheck_at, first_seen, last_seen
+      `,
+      [deviceId, hostname],
+    );
+
+    const updated = updateResult.rows[0];
+
+    if (!updated) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    return res.json({
+      ...updated,
+      ip: updated.ip_address,
+      name: updated.hostname,
+      mac: updated.mac_address,
+      online: Boolean(updated.online_status),
+      lastSeen: updated.last_seen,
     });
   } catch (err) {
     return next(err);

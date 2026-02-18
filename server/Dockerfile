@@ -1,6 +1,6 @@
 FROM node:20-bookworm
 
-RUN apt-get update && apt-get install -y nmap && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y nmap iputils-ping && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

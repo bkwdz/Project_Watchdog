@@ -1,5 +1,6 @@
 const { query } = require('../db');
 const greenboneMigration = require('./migrations/002_greenbone');
+const deviceHealthMigration = require('./migrations/003_device_health');
 
 const SCHEMA_STATEMENTS = [
   `
@@ -72,6 +73,7 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_vulnerabilities_cve ON vulnerabilities(cve);`,
   `CREATE INDEX IF NOT EXISTS idx_vulnerabilities_scan_id ON vulnerabilities(scan_id);`,
   ...greenboneMigration,
+  ...deviceHealthMigration,
 ];
 
 async function migrate() {

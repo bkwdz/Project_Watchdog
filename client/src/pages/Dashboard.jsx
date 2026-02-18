@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getDevices, getDevicesSummary } from '../api/endpoints';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
+import PieChart from '../components/PieChart';
 import ProgressBar from '../components/ProgressBar';
 import StatCard from '../components/StatCard';
 import StatusBadge from '../components/StatusBadge';
@@ -102,6 +103,10 @@ export default function Dashboard() {
   const totals = useMemo(() => {
     const fromSummary = summary?.totals || {};
     const totalDevices = Number(fromSummary.total_devices ?? devices.length);
+    const onlineDevices = Number(
+      fromSummary.online_devices ?? devices.filter((device) => device.online_status === true || device.online === true).length,
+    );
+    const offlineDevices = Number(fromSummary.offline_devices ?? Math.max(0, totalDevices - onlineDevices));
     const runningScans = Number(fromSummary.running_scans ?? scans.filter((scan) => scan.status === 'running').length);
     const queuedScans = Number(fromSummary.queued_scans ?? scans.filter((scan) => scan.status === 'queued').length);
     const totalScans = Number(fromSummary.total_scans ?? scans.length);
@@ -116,6 +121,8 @@ export default function Dashboard() {
 
     return {
       totalDevices,
+      onlineDevices,
+      offlineDevices,
       runningScans,
       queuedScans,
       totalScans,
@@ -132,10 +139,10 @@ export default function Dashboard() {
 
   const severityRows = useMemo(
     () => [
-      { key: 'critical', label: 'Critical', count: totals.criticalCount },
-      { key: 'high', label: 'High', count: totals.highCount },
-      { key: 'medium', label: 'Medium', count: totals.mediumCount },
-      { key: 'low', label: 'Low', count: totals.lowCount },
+      { key: 'critical', label: 'Critical', count: totals.criticalCount, color: '#ff5d5d' },
+      { key: 'high', label: 'High', count: totals.highCount, color: '#ff8a80' },
+      { key: 'medium', label: 'Medium', count: totals.mediumCount, color: '#ffb454' },
+      { key: 'low', label: 'Low', count: totals.lowCount, color: '#f5c451' },
     ],
     [totals],
   );
@@ -208,6 +215,7 @@ export default function Dashboard() {
     <div className="page-stack">
       <section className="stats-grid dashboard-stats-grid">
         <StatCard label="Total Devices" value={totals.totalDevices} tone="neutral" />
+        <StatCard label="Online / Offline" value={`${totals.onlineDevices} / ${totals.offlineDevices}`} tone="info" />
         <StatCard label="Running Scans" value={totals.runningScans} tone="info" />
         <StatCard label="Queued Scans" value={totals.queuedScans} tone="warning" />
         <StatCard label="Failed Scans" value={totals.failedScans} tone="danger" />
@@ -261,19 +269,25 @@ export default function Dashboard() {
 
       <section className="dashboard-split-grid">
         <Card title="Vulnerability Posture" subtitle="Distribution across discovered findings.">
-          {severityRows.map((row) => {
-            const width = severityTotal > 0 ? Math.round((row.count / severityTotal) * 100) : 0;
+          <div className="vuln-posture-grid">
+            <div className="severity-bars">
+              {severityRows.map((row) => {
+                const width = severityTotal > 0 ? Math.round((row.count / severityTotal) * 100) : 0;
 
-            return (
-              <div key={row.key} className="severity-bar-row">
-                <span className="severity-name">{row.label}</span>
-                <div className="severity-bar-track">
-                  <div className={`severity-bar-fill severity-${row.key}`} style={{ width: `${width}%` }} />
-                </div>
-                <span className="severity-count">{row.count}</span>
-              </div>
-            );
-          })}
+                return (
+                  <div key={row.key} className="severity-bar-row">
+                    <span className="severity-name">{row.label}</span>
+                    <div className="severity-bar-track">
+                      <div className={`severity-bar-fill severity-${row.key}`} style={{ width: `${width}%` }} />
+                    </div>
+                    <span className="severity-count">{row.count}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <PieChart title="Severity" segments={severityRows.map((row) => ({ ...row, value: row.count }))} />
+          </div>
         </Card>
 
         <Card title="Exposure Hotspots" subtitle="Most common open ports and services.">

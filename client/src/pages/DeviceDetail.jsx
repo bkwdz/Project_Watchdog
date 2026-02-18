@@ -5,11 +5,13 @@ import {
   createVulnerabilityScan,
   getDeviceById,
   getScanById,
+  updateDevice,
   getVulnerabilityScanConfigs,
   getVulnerabilityScannerStatus,
 } from '../api/endpoints';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
+import PieChart from '../components/PieChart';
 import ProgressBar from '../components/ProgressBar';
 import StatusBadge from '../components/StatusBadge';
 import ToastStack from '../components/ToastStack';
@@ -90,6 +92,11 @@ export default function DeviceDetail() {
   const [vulnConfigsLoaded, setVulnConfigsLoaded] = useState(false);
   const [vulnTcpPorts, setVulnTcpPorts] = useState('1-1000');
   const [vulnUdpPorts, setVulnUdpPorts] = useState('');
+  const [hostnameEditing, setHostnameEditing] = useState(false);
+  const [hostnameDraft, setHostnameDraft] = useState('');
+  const [hostnameSaving, setHostnameSaving] = useState(false);
+  const [portsVisibleCount, setPortsVisibleCount] = useState(10);
+  const [vulnsVisibleCount, setVulnsVisibleCount] = useState(10);
 
   const {
     scans,
@@ -212,6 +219,14 @@ export default function DeviceDetail() {
     };
   }, [activeScan, loadDevice, loadScans, pushToast, registerScan]);
 
+  useEffect(() => {
+    if (!device || hostnameEditing) {
+      return;
+    }
+
+    setHostnameDraft(device.hostname || '');
+  }, [device, hostnameEditing]);
+
   const startProfileScan = async (scanType) => {
     const targetIp = device?.ip_address || device?.ip;
 
@@ -292,6 +307,27 @@ export default function DeviceDetail() {
     () => (Array.isArray(device?.vulnerabilities) ? device.vulnerabilities : []),
     [device],
   );
+
+  const visiblePortRows = useMemo(
+    () => portRows.slice(0, portsVisibleCount),
+    [portRows, portsVisibleCount],
+  );
+
+  const visibleVulnerabilityRows = useMemo(
+    () => vulnerabilityRows.slice(0, vulnsVisibleCount),
+    [vulnerabilityRows, vulnsVisibleCount],
+  );
+
+  const hasMorePorts = portRows.length > portsVisibleCount;
+  const hasMoreVulnerabilities = vulnerabilityRows.length > vulnsVisibleCount;
+
+  useEffect(() => {
+    setPortsVisibleCount(10);
+  }, [portRows.length]);
+
+  useEffect(() => {
+    setVulnsVisibleCount(10);
+  }, [vulnerabilityRows.length]);
 
   const deviceSnapshot = useMemo(() => {
     const openPorts = portRows.filter((row) => String(row.state || '').toLowerCase() === 'open');
@@ -414,6 +450,74 @@ export default function DeviceDetail() {
     [navigate],
   );
 
+  const severitySegments = useMemo(
+    () => [
+      {
+        key: 'critical',
+        label: 'Critical',
+        value: deviceSnapshot.severityCounts.critical,
+        color: '#ff5d5d',
+      },
+      {
+        key: 'high',
+        label: 'High',
+        value: deviceSnapshot.severityCounts.high,
+        color: '#ff8a80',
+      },
+      {
+        key: 'medium',
+        label: 'Medium',
+        value: deviceSnapshot.severityCounts.medium,
+        color: '#ffb454',
+      },
+      {
+        key: 'low',
+        label: 'Low',
+        value: deviceSnapshot.severityCounts.low,
+        color: '#f5c451',
+      },
+    ],
+    [deviceSnapshot.severityCounts],
+  );
+
+  const saveHostname = async () => {
+    if (!device?.id) {
+      return;
+    }
+
+    const nextHostname = hostnameDraft.trim();
+    const currentHostname = String(device.hostname || '').trim();
+
+    if (nextHostname === currentHostname) {
+      setHostnameEditing(false);
+      return;
+    }
+
+    setHostnameSaving(true);
+
+    try {
+      const updated = await updateDevice(device.id, { hostname: nextHostname });
+      setDevice((prev) => {
+        if (!prev) {
+          return updated;
+        }
+
+        return {
+          ...prev,
+          ...updated,
+          ports: prev.ports,
+          vulnerabilities: prev.vulnerabilities,
+        };
+      });
+      setHostnameEditing(false);
+      pushToast('Device hostname updated.', 'success');
+    } catch (err) {
+      pushToast(err?.response?.data?.error || 'Unable to update device hostname.', 'error');
+    } finally {
+      setHostnameSaving(false);
+    }
+  };
+
   return (
     <div className="page-stack">
       <Card title="Device Detail" subtitle={device?.ip_address || device?.ip || 'Host record'}>
@@ -421,101 +525,180 @@ export default function DeviceDetail() {
         {error && <p className="error-text">{error}</p>}
 
         {!loading && !error && device && (
-          <dl className="detail-grid">
-            <div>
-              <dt>IP</dt>
-              <dd>{device.ip_address || device.ip || '-'}</dd>
+          <>
+            <div className="device-identity-row">
+              <div>
+                <p className="device-identity-label">Display Name</p>
+                <h4 className="device-identity-value">
+                  {device.hostname || device.name || device.ip_address || device.ip || '-'}
+                </h4>
+              </div>
+              {!hostnameEditing && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Edit device hostname"
+                  onClick={() => setHostnameEditing(true)}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M4 17.25V20h2.75L17.81 8.94l-2.75-2.75L4 17.25zm15.71-9.04a1.003 1.003 0 000-1.42l-2.5-2.5a1.003 1.003 0 00-1.42 0l-1.96 1.96 3.92 3.92 1.96-1.96z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                </button>
+              )}
             </div>
-            <div>
-              <dt>Hostname</dt>
-              <dd>{device.hostname || device.name || '-'}</dd>
-            </div>
-            <div>
-              <dt>MAC</dt>
-              <dd>{device.mac_address || device.mac || '-'}</dd>
-            </div>
-            <div>
-              <dt>OS</dt>
-              <dd>{device.os_guess || '-'}</dd>
-            </div>
-            <div>
-              <dt>First Seen</dt>
-              <dd>{formatDateTime(device.first_seen)}</dd>
-            </div>
-            <div>
-              <dt>Last Seen</dt>
-              <dd>{formatDateTime(device.last_seen)}</dd>
-            </div>
-          </dl>
+
+            {hostnameEditing && (
+              <div className="hostname-edit-row">
+                <div className="field-stack hostname-field">
+                  <label htmlFor="hostname-edit-input">Hostname</label>
+                  <input
+                    id="hostname-edit-input"
+                    type="text"
+                    placeholder="Set custom hostname (blank clears)"
+                    value={hostnameDraft}
+                    disabled={hostnameSaving}
+                    onChange={(event) => setHostnameDraft(event.target.value)}
+                  />
+                </div>
+                <div className="hostname-edit-actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={hostnameSaving}
+                    onClick={saveHostname}
+                  >
+                    {hostnameSaving ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={hostnameSaving}
+                    onClick={() => {
+                      setHostnameEditing(false);
+                      setHostnameDraft(device.hostname || '');
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <dl className="detail-grid">
+              <div>
+                <dt>IP</dt>
+                <dd>{device.ip_address || device.ip || '-'}</dd>
+              </div>
+              <div>
+                <dt>Hostname</dt>
+                <dd>{device.hostname || '-'}</dd>
+              </div>
+              <div>
+                <dt>MAC</dt>
+                <dd>{device.mac_address || device.mac || '-'}</dd>
+              </div>
+              <div>
+                <dt>OS</dt>
+                <dd>{device.os_guess || '-'}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{device.online || device.online_status ? 'Online' : 'Offline'}</dd>
+              </div>
+              <div>
+                <dt>Last Health Check</dt>
+                <dd>{formatDateTime(device.last_healthcheck_at)}</dd>
+              </div>
+              <div>
+                <dt>First Seen</dt>
+                <dd>{formatDateTime(device.first_seen)}</dd>
+              </div>
+              <div>
+                <dt>Last Seen</dt>
+                <dd>{formatDateTime(device.last_seen)}</dd>
+              </div>
+            </dl>
+          </>
         )}
       </Card>
 
       <Card title="Actions" subtitle="Start targeted discovery and vulnerability scans for this host.">
-        <div className="button-row">
-          {['quick', 'standard', 'aggressive', 'full'].map((scanType) => (
-            <button
-              key={scanType}
-              type="button"
-              className="primary-button"
-              disabled={Boolean(triggeringType) || loading || !device}
-              onClick={() => startProfileScan(scanType)}
-            >
-              {triggeringType === scanType ? 'Starting...' : `${scanType[0].toUpperCase()}${scanType.slice(1)} Scan`}
-            </button>
-          ))}
-
-          <div className="vuln-action-inline">
-            <button
-              type="button"
-              className="danger-button"
-              disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || !vulnConfigId || vulnTriggering || loading || !device}
-              title={vulnEnabled ? 'Run Greenbone vulnerability scan' : 'Vulnerability scanner not enabled'}
-              onClick={startVulnScan}
-            >
-              {vulnTriggering ? 'Starting...' : 'Vulnerability Scan'}
-            </button>
-
-            <select
-              id="vuln-config-select"
-              className="vuln-profile-select"
-              aria-label="Vulnerability Scan Profile"
-              value={vulnConfigId}
-              disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || vulnTriggering || loading || !device}
-              onChange={(event) => setVulnConfigId(event.target.value)}
-            >
-              {vulnConfigs.length === 0 && <option value="">No scan profiles available</option>}
-              {vulnConfigs.map((config) => (
-                <option key={config.id} value={config.id}>
-                  {config.name || config.id}
-                </option>
+        <div className="device-actions-layout">
+          <section className="device-actions-nmap">
+            <p className="actions-group-title">Nmap Scan Profiles</p>
+            <div className="nmap-button-row">
+              {['quick', 'standard', 'aggressive', 'full'].map((scanType) => (
+                <button
+                  key={scanType}
+                  type="button"
+                  className="primary-button nmap-action-button"
+                  disabled={Boolean(triggeringType) || loading || !device}
+                  onClick={() => startProfileScan(scanType)}
+                >
+                  {triggeringType === scanType ? 'Starting...' : `${scanType[0].toUpperCase()}${scanType.slice(1)} Scan`}
+                </button>
               ))}
-            </select>
+            </div>
+          </section>
 
-            <div className="vuln-port-row">
-              <div className="field-stack vuln-port-field">
-                <label htmlFor="vuln-tcp-ports">TCP Ports</label>
-                <input
-                  id="vuln-tcp-ports"
-                  type="text"
-                  placeholder="1-1000"
-                  value={vulnTcpPorts}
-                  disabled={!vulnEnabled || !vulnStatusLoaded || vulnTriggering || loading || !device}
-                  onChange={(event) => setVulnTcpPorts(event.target.value)}
-                />
-              </div>
-              <div className="field-stack vuln-port-field">
-                <label htmlFor="vuln-udp-ports">UDP Ports</label>
-                <input
-                  id="vuln-udp-ports"
-                  type="text"
-                  placeholder="blank or 0 = disabled"
-                  value={vulnUdpPorts}
-                  disabled={!vulnEnabled || !vulnStatusLoaded || vulnTriggering || loading || !device}
-                  onChange={(event) => setVulnUdpPorts(event.target.value)}
-                />
+          <section className="device-actions-vuln">
+            <p className="actions-group-title">Vulnerability Scan (Greenbone)</p>
+            <div className="vuln-action-inline">
+              <button
+                type="button"
+                className="danger-button"
+                disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || !vulnConfigId || vulnTriggering || loading || !device}
+                title={vulnEnabled ? 'Run Greenbone vulnerability scan' : 'Vulnerability scanner not enabled'}
+                onClick={startVulnScan}
+              >
+                {vulnTriggering ? 'Starting...' : 'Vulnerability Scan'}
+              </button>
+
+              <select
+                id="vuln-config-select"
+                className="vuln-profile-select"
+                aria-label="Vulnerability Scan Profile"
+                value={vulnConfigId}
+                disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || vulnTriggering || loading || !device}
+                onChange={(event) => setVulnConfigId(event.target.value)}
+              >
+                {vulnConfigs.length === 0 && <option value="">No scan profiles available</option>}
+                {vulnConfigs.map((config) => (
+                  <option key={config.id} value={config.id}>
+                    {config.name || config.id}
+                  </option>
+                ))}
+              </select>
+
+              <div className="vuln-port-row">
+                <div className="field-stack vuln-port-field">
+                  <label htmlFor="vuln-tcp-ports">TCP Ports</label>
+                  <input
+                    id="vuln-tcp-ports"
+                    type="text"
+                    placeholder="1-1000"
+                    value={vulnTcpPorts}
+                    disabled={!vulnEnabled || !vulnStatusLoaded || vulnTriggering || loading || !device}
+                    onChange={(event) => setVulnTcpPorts(event.target.value)}
+                  />
+                </div>
+                <div className="field-stack vuln-port-field">
+                  <label htmlFor="vuln-udp-ports">UDP Ports</label>
+                  <input
+                    id="vuln-udp-ports"
+                    type="text"
+                    placeholder="blank or 0 = disabled"
+                    value={vulnUdpPorts}
+                    disabled={!vulnEnabled || !vulnStatusLoaded || vulnTriggering || loading || !device}
+                    onChange={(event) => setVulnUdpPorts(event.target.value)}
+                  />
+                </div>
               </div>
             </div>
-          </div>
+          </section>
         </div>
 
         {!vulnConfigsLoaded && vulnEnabled && <p className="muted">Loading vulnerability scan profiles...</p>}
@@ -556,22 +739,30 @@ export default function DeviceDetail() {
         <div className="device-insight-grid">
           <article className="insight-panel">
             <h4>Severity Distribution</h4>
-            <div className="severity-bars">
-              {['critical', 'high', 'medium', 'low'].map((bucket) => {
-                const count = deviceSnapshot.severityCounts[bucket];
-                const denominator = deviceSnapshot.vulnerabilityTotal || 1;
-                const width = Math.round((count / denominator) * 100);
+            <div className="device-severity-layout">
+              <div className="severity-bars">
+                {['critical', 'high', 'medium', 'low'].map((bucket) => {
+                  const count = deviceSnapshot.severityCounts[bucket];
+                  const denominator = deviceSnapshot.vulnerabilityTotal || 1;
+                  const width = Math.round((count / denominator) * 100);
 
-                return (
-                  <div key={bucket} className="severity-bar-row">
-                    <span className="severity-name">{bucket}</span>
-                    <div className="severity-bar-track">
-                      <div className={`severity-bar-fill severity-${bucket}`} style={{ width: `${width}%` }} />
+                  return (
+                    <div key={bucket} className="severity-bar-row">
+                      <span className="severity-name">{bucket}</span>
+                      <div className="severity-bar-track">
+                        <div className={`severity-bar-fill severity-${bucket}`} style={{ width: `${width}%` }} />
+                      </div>
+                      <span className="severity-count">{count}</span>
                     </div>
-                    <span className="severity-count">{count}</span>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+
+              <PieChart
+                title="Severity"
+                totalLabel={deviceSnapshot.vulnerabilityTotal}
+                segments={severitySegments}
+              />
             </div>
           </article>
 
@@ -604,11 +795,29 @@ export default function DeviceDetail() {
         <Card title="Ports" subtitle="Observed service exposure by protocol and state." className="device-panel-card">
           <DataTable
             columns={portsColumns}
-            rows={portRows}
+            rows={visiblePortRows}
             emptyMessage="No port data for this device yet."
             wrapperClassName="table-wrapper-compact"
             tableClassName="ui-table-compact"
           />
+          {portRows.length > 10 && (
+            <div className="table-expand-row">
+              <button
+                type="button"
+                className="small-button"
+                onClick={() => {
+                  if (hasMorePorts) {
+                    setPortsVisibleCount((current) => Math.min(current + 10, portRows.length));
+                    return;
+                  }
+
+                  setPortsVisibleCount(10);
+                }}
+              >
+                {hasMorePorts ? `Show More (${portRows.length - portsVisibleCount} remaining)` : 'Show Less'}
+              </button>
+            </div>
+          )}
         </Card>
 
         <Card
@@ -618,11 +827,31 @@ export default function DeviceDetail() {
         >
           <DataTable
             columns={vulnerabilityColumns}
-            rows={vulnerabilityRows}
+            rows={visibleVulnerabilityRows}
             emptyMessage="No vulnerabilities reported for this device yet."
             wrapperClassName="table-wrapper-compact"
             tableClassName="ui-table-compact"
           />
+          {vulnerabilityRows.length > 10 && (
+            <div className="table-expand-row">
+              <button
+                type="button"
+                className="small-button"
+                onClick={() => {
+                  if (hasMoreVulnerabilities) {
+                    setVulnsVisibleCount((current) => Math.min(current + 10, vulnerabilityRows.length));
+                    return;
+                  }
+
+                  setVulnsVisibleCount(10);
+                }}
+              >
+                {hasMoreVulnerabilities
+                  ? `Show More (${vulnerabilityRows.length - vulnsVisibleCount} remaining)`
+                  : 'Show Less'}
+              </button>
+            </div>
+          )}
         </Card>
       </section>
 

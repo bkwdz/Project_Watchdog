@@ -3,6 +3,7 @@ const app = require('./app');
 const { waitForDatabase } = require('./db');
 const { migrate } = require('./db/migrate');
 const { resumeQueuedScans } = require('./services/scanWorker');
+const { startDeviceHealthChecks } = require('./services/deviceHealthService');
 
 const PORT = process.env.PORT || 8080;
 
@@ -11,6 +12,7 @@ async function start() {
     await waitForDatabase();
     await migrate();
     await resumeQueuedScans();
+    await startDeviceHealthChecks();
     console.log('Database connection OK');
 
     app.listen(PORT, () => {

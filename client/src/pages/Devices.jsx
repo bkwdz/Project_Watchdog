@@ -216,6 +216,7 @@ export default function Devices() {
 
             {orderedDevices.map((device) => {
               const risk = riskTone(device.open_ports);
+              const isOnline = device.online_status === true || device.online === true;
 
               return (
                 <button
@@ -231,6 +232,12 @@ export default function Devices() {
 
                   <p className="device-meta">IP: {device.ip_address || device.ip || '-'}</p>
                   <p className="device-meta">OS: {device.os_guess || 'Unknown'}</p>
+                  <p className="device-meta">
+                    Status:{' '}
+                    <span className={`health-pill ${isOnline ? 'health-online' : 'health-offline'}`}>
+                      {isOnline ? 'Online' : 'Offline'}
+                    </span>
+                  </p>
                   <p className="device-meta">Open ports: {Number(device.open_ports || 0)}</p>
                   <p className="device-meta">
                     Last seen: {formatRelative(device.last_seen)} ({formatDateTime(device.last_seen)})

@@ -15,6 +15,11 @@ export async function getDeviceById(deviceId) {
   return response.data;
 }
 
+export async function updateDevice(deviceId, payload) {
+  const response = await api.patch(`/devices/${deviceId}`, payload);
+  return response.data;
+}
+
 export async function createScan({ target, scan_type }) {
   const response = await api.post('/scans', { target, scan_type });
   return response.data;
