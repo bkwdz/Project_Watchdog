@@ -1073,6 +1073,77 @@ select:focus {
   margin-top: 10px;
 }
 
+.settings-panel-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-heading-row h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.settings-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hover-tip {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(57, 201, 255, 0.38);
+  color: var(--accent);
+  background: rgba(57, 201, 255, 0.12);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+}
+
+.hover-tip-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 280px;
+  max-width: 360px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: rgba(7, 15, 31, 0.98);
+  color: var(--text-main);
+  box-shadow: var(--shadow-md);
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  z-index: 20;
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.hover-tip:hover .hover-tip-panel,
+.hover-tip:focus .hover-tip-panel {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .pie-chart-wrap {
   display: grid;
   gap: 10px;
@@ -1248,6 +1319,10 @@ select:focus {
   }
 
   .vuln-port-row {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-form-grid {
     grid-template-columns: 1fr;
   }
 

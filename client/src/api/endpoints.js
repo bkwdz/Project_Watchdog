@@ -68,3 +68,13 @@ export async function getVulnerabilityScanConfigs() {
   const response = await api.get('/scans/vuln/configs');
   return response.data;
 }
+
+export async function getVulnerabilitySettings() {
+  const response = await api.get('/scans/vuln/settings');
+  return response.data;
+}
+
+export async function updateVulnerabilitySettings(payload) {
+  const response = await api.put('/scans/vuln/settings', payload);
+  return response.data;
+}

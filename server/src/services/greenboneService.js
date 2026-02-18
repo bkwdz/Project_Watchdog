@@ -27,6 +27,8 @@ function ensureEnabled() {
 
 function getConfig() {
   const socketPath = String(process.env.GREENBONE_SOCKET_PATH || '').trim();
+  const envMaxChecks = Number.parseInt(String(process.env.GREENBONE_MAX_CHECKS || '').trim(), 10);
+  const envMaxHosts = Number.parseInt(String(process.env.GREENBONE_MAX_HOSTS || '').trim(), 10);
 
   return {
     host: process.env.GREENBONE_HOST || 'greenbone',
@@ -40,6 +42,8 @@ function getConfig() {
     portRange: process.env.GREENBONE_PORT_RANGE || 'T:1-65535',
     scanConfigId: process.env.GREENBONE_SCAN_CONFIG_ID || 'daba56c8-73ec-11df-a475-002264764cea',
     scannerId: process.env.GREENBONE_SCANNER_ID || '08b69003-5fc2-4037-a479-93b440211c73',
+    maxChecks: Number.isInteger(envMaxChecks) && envMaxChecks > 0 ? envMaxChecks : null,
+    maxHosts: Number.isInteger(envMaxHosts) && envMaxHosts > 0 ? envMaxHosts : null,
   };
 }
 
@@ -184,6 +188,52 @@ function parseCve(value) {
 
   const match = candidates.find((entry) => /^CVE-\d{4}-\d{4,}$/i.test(entry));
   return match || null;
+}
+
+function parseTaskConcurrencyValue(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const parsed = Number.parseInt(String(value).trim(), 10);
+
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 64) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function buildTaskPreferencesXml(maxChecks, maxHosts) {
+  const preferences = [];
+
+  if (Number.isInteger(maxChecks) && maxChecks > 0) {
+    preferences.push(`
+      <preference>
+        <scanner_name>max_checks</scanner_name>
+        <value>${xmlEscape(maxChecks)}</value>
+      </preference>
+    `);
+  }
+
+  if (Number.isInteger(maxHosts) && maxHosts > 0) {
+    preferences.push(`
+      <preference>
+        <scanner_name>max_hosts</scanner_name>
+        <value>${xmlEscape(maxHosts)}</value>
+      </preference>
+    `);
+  }
+
+  if (preferences.length === 0) {
+    return '';
+  }
+
+  return `
+    <preferences>
+      ${preferences.join('\n')}
+    </preferences>
+  `;
 }
 
 function isValidPortToken(token) {
@@ -829,6 +879,8 @@ async function startScan(target, options = {}) {
   const safeTarget = String(target || '').trim();
   const requestedScanConfigId = String(options.scanConfigId || '').trim() || null;
   const requestedPortRange = String(options.portRange || '').trim() || null;
+  const requestedMaxChecks = parseTaskConcurrencyValue(options.maxChecks);
+  const requestedMaxHosts = parseTaskConcurrencyValue(options.maxHosts);
 
   if (!safeTarget) {
     throw new GreenboneServiceError('Target is required', {
@@ -842,6 +894,9 @@ async function startScan(target, options = {}) {
     const resolvedConfigId = await resolveScanConfigId(socket, requestedScanConfigId || config.scanConfigId);
     const resolvedScannerId = await resolveScannerId(socket, config.scannerId);
     const resolvedPortRange = requestedPortRange || String(config.portRange || '').trim();
+    const resolvedMaxChecks = requestedMaxChecks ?? parseTaskConcurrencyValue(config.maxChecks);
+    const resolvedMaxHosts = requestedMaxHosts ?? parseTaskConcurrencyValue(config.maxHosts);
+    const taskPreferencesXml = buildTaskPreferencesXml(resolvedMaxChecks, resolvedMaxHosts);
 
     if (!isValidGreenbonePortRange(resolvedPortRange)) {
       throw new GreenboneServiceError('Invalid Greenbone port range format', {
@@ -878,6 +933,7 @@ async function startScan(target, options = {}) {
           <config id="${xmlEscape(resolvedConfigId)}" />
           <target id="${xmlEscape(targetId)}" />
           <scanner id="${xmlEscape(resolvedScannerId)}" />
+          ${taskPreferencesXml}
         </create_task>
       `,
     );

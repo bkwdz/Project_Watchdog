@@ -14,6 +14,9 @@ const { isValidCidr, isValidTarget, isValidIPv4 } = require('../utils/targetVali
 
 const GREENBONE_DISABLED_MESSAGE = 'Vulnerability scanner not enabled';
 
+const DEFAULT_GREENBONE_MAX_CHECKS = Number.parseInt(process.env.GREENBONE_MAX_CHECKS || '4', 10) || 4;
+const DEFAULT_GREENBONE_MAX_HOSTS = Number.parseInt(process.env.GREENBONE_MAX_HOSTS || '1', 10) || 1;
+
 const SCAN_COLUMNS = `
   id,
   target,
@@ -33,6 +36,52 @@ function normalizeTarget(target) {
 
 function normalizeOptionalText(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function hasOwn(body, key) {
+  return Object.prototype.hasOwnProperty.call(body || {}, key);
+}
+
+function parsePositiveInteger(value, fieldName, { min = 1, max = 64 } = {}) {
+  const parsed = Number.parseInt(String(value).trim(), 10);
+
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${fieldName} must be an integer between ${min} and ${max}`);
+  }
+
+  return parsed;
+}
+
+async function getStoredVulnerabilitySettings() {
+  await query(
+    `
+      INSERT INTO scanner_settings (id, greenbone_max_checks, greenbone_max_hosts)
+      VALUES (1, $1, $2)
+      ON CONFLICT (id) DO NOTHING
+    `,
+    [DEFAULT_GREENBONE_MAX_CHECKS, DEFAULT_GREENBONE_MAX_HOSTS],
+  );
+
+  const settingsResult = await query(
+    `
+      SELECT greenbone_max_checks, greenbone_max_hosts, updated_at
+      FROM scanner_settings
+      WHERE id = 1
+      LIMIT 1
+    `,
+  );
+
+  const settings = settingsResult.rows[0];
+
+  if (!settings) {
+    return {
+      greenbone_max_checks: DEFAULT_GREENBONE_MAX_CHECKS,
+      greenbone_max_hosts: DEFAULT_GREENBONE_MAX_HOSTS,
+      updated_at: null,
+    };
+  }
+
+  return settings;
 }
 
 function parsePortSpec(spec, fieldName) {
@@ -566,6 +615,8 @@ exports.createVulnerabilityScan = async (req, res, next) => {
       return res.status(400).json({ error: 'target must be a valid IPv4 address or CIDR range' });
     }
 
+    const runtimeSettings = await getStoredVulnerabilitySettings();
+
     const queuedResult = await query(
       `
         INSERT INTO scans (target, scan_type, scanner_type, status, progress_percent, initiated_by)
@@ -581,6 +632,8 @@ exports.createVulnerabilityScan = async (req, res, next) => {
       const job = await startGreenboneScan(target, {
         scanConfigId: scanConfigId || undefined,
         portRange: portRange || undefined,
+        maxChecks: runtimeSettings.greenbone_max_checks,
+        maxHosts: runtimeSettings.greenbone_max_hosts,
       });
 
       const runningScan = await updateScan(queuedScan.id, {
@@ -600,6 +653,77 @@ exports.createVulnerabilityScan = async (req, res, next) => {
       const mappedError = toControllerError(error, 'Unable to start vulnerability scan');
       return res.status(mappedError.statusCode).json(mappedError.payload);
     }
+  } catch (err) {
+    return next(err);
+  }
+};
+
+exports.getVulnerabilitySettings = async (req, res, next) => {
+  try {
+    const settings = await getStoredVulnerabilitySettings();
+
+    return res.json({
+      max_checks: settings.greenbone_max_checks,
+      max_hosts: settings.greenbone_max_hosts,
+      updated_at: settings.updated_at,
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+exports.updateVulnerabilitySettings = async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const hasMaxChecks = hasOwn(body, 'max_checks');
+    const hasMaxHosts = hasOwn(body, 'max_hosts');
+
+    if (!hasMaxChecks && !hasMaxHosts) {
+      return res.status(400).json({ error: 'Provide max_checks or max_hosts' });
+    }
+
+    const current = await getStoredVulnerabilitySettings();
+
+    let maxChecks = current.greenbone_max_checks;
+    let maxHosts = current.greenbone_max_hosts;
+
+    if (hasMaxChecks) {
+      try {
+        maxChecks = parsePositiveInteger(body.max_checks, 'max_checks', { min: 1, max: 64 });
+      } catch (error) {
+        return res.status(400).json({ error: error.message });
+      }
+    }
+
+    if (hasMaxHosts) {
+      try {
+        maxHosts = parsePositiveInteger(body.max_hosts, 'max_hosts', { min: 1, max: 64 });
+      } catch (error) {
+        return res.status(400).json({ error: error.message });
+      }
+    }
+
+    const updateResult = await query(
+      `
+        INSERT INTO scanner_settings (id, greenbone_max_checks, greenbone_max_hosts, updated_at)
+        VALUES (1, $1, $2, NOW())
+        ON CONFLICT (id)
+        DO UPDATE SET
+          greenbone_max_checks = EXCLUDED.greenbone_max_checks,
+          greenbone_max_hosts = EXCLUDED.greenbone_max_hosts,
+          updated_at = NOW()
+        RETURNING greenbone_max_checks, greenbone_max_hosts, updated_at
+      `,
+      [maxChecks, maxHosts],
+    );
+
+    const updated = updateResult.rows[0];
+
+    return res.json({
+      max_checks: updated.greenbone_max_checks,
+      max_hosts: updated.greenbone_max_hosts,
+      updated_at: updated.updated_at,
+    });
   } catch (err) {
     return next(err);
   }

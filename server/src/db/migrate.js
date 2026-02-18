@@ -2,6 +2,7 @@ const { query } = require('../db');
 const greenboneMigration = require('./migrations/002_greenbone');
 const deviceHealthMigration = require('./migrations/003_device_health');
 const deviceDisplayNameMigration = require('./migrations/004_device_display_name');
+const scannerSettingsMigration = require('./migrations/005_scanner_settings');
 
 const SCHEMA_STATEMENTS = [
   `
@@ -77,6 +78,7 @@ const SCHEMA_STATEMENTS = [
   ...greenboneMigration,
   ...deviceHealthMigration,
   ...deviceDisplayNameMigration,
+  ...scannerSettingsMigration,
 ];
 
 async function migrate() {
