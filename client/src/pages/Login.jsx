@@ -1,74 +1,92 @@
-import React, { useEffect, useState, useContext } from 'react';
+import { useContext, useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../contexts/AuthContext';
-import { useNavigate, Link, useLocation } from 'react-router-dom';
 
 export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
   const { user, loading, login } = useContext(AuthContext);
   const navigate = useNavigate();
   const location = useLocation();
-  const [error, setError] = useState(null);
-  const [message, setMessage] = useState(location.state?.message || null);
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!loading && user) {
       navigate('/', { replace: true });
     }
-  }, [loading, user, navigate]);
+  }, [loading, navigate, user]);
 
-  const handle = async (e) => {
-    e.preventDefault();
+  useEffect(() => {
+    if (location.state?.message) {
+      setMessage(location.state.message);
+    }
+  }, [location.state]);
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     setSubmitting(true);
-    setError(null);
-    setMessage(null);
+    setError('');
+    setMessage('');
 
     const redirectPath = location.state?.from || '/';
 
     try {
       await login(username, password);
-      setMessage('Login successful. Redirecting...');
-      setTimeout(() => navigate(redirectPath, { replace: true }), 250);
+      navigate(redirectPath, { replace: true });
     } catch (err) {
-      setError(err.response?.data?.error || 'Invalid login');
+      setError(err?.response?.data?.error || 'Invalid login');
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>Login</h2>
+    <div className="auth-screen">
+      <form className="auth-card" onSubmit={handleSubmit}>
+        <p className="brand-overline">Watchdog</p>
+        <h2>Sign In</h2>
+        <p className="muted">Access your SOC dashboard.</p>
 
-      {message && <div style={{ color: 'green', marginBottom: '10px' }}>{message}</div>}
-      {error && <div style={{ color: 'red', marginBottom: '10px' }}>{error}</div>}
+        {message && <p className="success-text">{message}</p>}
+        {error && <p className="error-text">{error}</p>}
 
-      <form onSubmit={handle}>
-        <input 
-          placeholder="username"
-          value={username}
-          onChange={e => setUsername(e.target.value)}
-        />
+        <div className="field-stack">
+          <label htmlFor="loginUser">Username</label>
+          <input
+            id="loginUser"
+            type="text"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            autoComplete="username"
+            required
+          />
+        </div>
 
-        <input 
-          placeholder="password"
-          type="password"
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-        />
+        <div className="field-stack">
+          <label htmlFor="loginPass">Password</label>
+          <input
+            id="loginPass"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="current-password"
+            required
+          />
+        </div>
 
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Logging in...' : 'Login'}
+        <button type="submit" className="primary-button" disabled={submitting}>
+          {submitting ? 'Signing in...' : 'Login'}
         </button>
-      </form>
 
-      {/* Register button */}
-      <div style={{ marginTop: '10px' }}>
-        <Link to="/register">
-          <button>Register</button>
-        </Link>
-      </div>
+        <p className="muted">
+          Need an account?
+          {' '}
+          <Link to="/register">Register</Link>
+        </p>
+      </form>
     </div>
   );
 }

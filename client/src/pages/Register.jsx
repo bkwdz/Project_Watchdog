@@ -1,85 +1,100 @@
-import React, { useState, useContext } from 'react';
+import { useContext, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
 
 export default function Register() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState(null);
+  const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const { user, register } = useContext(AuthContext);
   const navigate = useNavigate();
 
-  const handleRegister = async () => {
-    setError(null);
-    setSubmitting(true);
+  const handleRegister = async (event) => {
+    event.preventDefault();
+    setError('');
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
-      setSubmitting(false);
+      setError('Passwords do not match.');
       return;
     }
 
+    setSubmitting(true);
+
     try {
       await register(username, password);
-      navigate("/login", {
+      navigate('/login', {
         replace: true,
-        state: { message: "Account created successfully. You can now log in." },
+        state: { message: 'Account created successfully. You can now log in.' },
       });
     } catch (err) {
-      setError(err.response?.data?.error || "Register failed");
+      setError(err?.response?.data?.error || 'Register failed');
     } finally {
       setSubmitting(false);
     }
   };
 
+  const blocked = Boolean(user && user.role !== 'admin');
+
   return (
-    <div style={{ padding: 20 }}>
-      <h2>Create Account</h2>
+    <div className="auth-screen">
+      <form className="auth-card" onSubmit={handleRegister}>
+        <p className="brand-overline">Watchdog</p>
+        <h2>Create Account</h2>
+        <p className="muted">Admin-only user provisioning.</p>
 
-      {user && user.role !== "admin" && (
-        <div style={{ color: "red", marginBottom: 15 }}>
-          Only administrators can create new accounts.
+        {blocked && <p className="error-text">Only administrators can create new accounts.</p>}
+        {error && <p className="error-text">{error}</p>}
+
+        <div className="field-stack">
+          <label htmlFor="registerUser">Username</label>
+          <input
+            id="registerUser"
+            type="text"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            autoComplete="username"
+            required
+          />
         </div>
-      )}
 
-      <input
-        placeholder="username"
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-        style={{ display: "block", marginBottom: 10 }}
-      />
-
-      <input
-        placeholder="password"
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        style={{ display: "block", marginBottom: 10 }}
-      />
-
-      <input
-        placeholder="confirm password"
-        type="password"
-        value={confirmPassword}
-        onChange={(e) => setConfirmPassword(e.target.value)}
-        style={{ display: "block", marginBottom: 10 }}
-      />
-
-      <button
-        onClick={handleRegister}
-        disabled={(user && user.role !== "admin") || submitting}
-      >
-        {submitting ? "Creating..." : "Create Account"}
-      </button>
-
-      {error && (
-        <div style={{ color: "red", marginTop: 10 }}>
-          {error}
+        <div className="field-stack">
+          <label htmlFor="registerPass">Password</label>
+          <input
+            id="registerPass"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="new-password"
+            required
+          />
         </div>
-      )}
+
+        <div className="field-stack">
+          <label htmlFor="registerConfirm">Confirm Password</label>
+          <input
+            id="registerConfirm"
+            type="password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            autoComplete="new-password"
+            required
+          />
+        </div>
+
+        <button type="submit" className="primary-button" disabled={blocked || submitting}>
+          {submitting ? 'Creating...' : 'Create Account'}
+        </button>
+
+        <p className="muted">
+          Back to
+          {' '}
+          <Link to="/login">login</Link>
+          .
+        </p>
+      </form>
     </div>
   );
 }

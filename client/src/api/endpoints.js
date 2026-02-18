@@ -1,9 +1,31 @@
 import api from './api';
 
-// Devices
-export const getDevices = () => api.get('/devices');
+export async function getDevices() {
+  const response = await api.get('/devices');
+  return response.data;
+}
 
-// Scans
-export const startScan = (ip) => api.post('/scans/start', { ip });
-export const getScanResults = (deviceId) => api.get(`/scans/results/${deviceId}`);
-export const getLatestScan = (deviceId) => api.get(`/scans/latest/${deviceId}`);
+export async function getDeviceById(deviceId) {
+  const response = await api.get(`/devices/${deviceId}`);
+  return response.data;
+}
+
+export async function createScan({ target, scan_type }) {
+  const response = await api.post('/scans', { target, scan_type });
+  return response.data;
+}
+
+export async function createScanLegacy({ ip, scan_type }) {
+  const response = await api.post('/scans/start', { ip, scan_type });
+  return response.data;
+}
+
+export async function getScanById(scanId) {
+  const response = await api.get(`/scans/${scanId}`);
+  return response.data;
+}
+
+export async function getScansList() {
+  const response = await api.get('/scans');
+  return response.data;
+}

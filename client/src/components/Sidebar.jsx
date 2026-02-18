@@ -1,56 +1,32 @@
-import { Link, useLocation } from "react-router-dom";
+import { NavLink } from 'react-router-dom';
 
-const Sidebar = () => {
-  const { pathname } = useLocation();
+const NAV_ITEMS = [
+  { to: '/', label: 'Dashboard' },
+  { to: '/devices', label: 'Devices' },
+  { to: '/scans', label: 'Scans' },
+  { to: '/settings', label: 'Settings' },
+];
 
+export default function Sidebar() {
   return (
-    <div style={styles.sidebar}>
-      <h2 style={styles.title}>Watchdog</h2>
+    <aside className="sidebar">
+      <div className="sidebar-brand">
+        <p className="brand-overline">Watchdog</p>
+        <h1>Security Ops</h1>
+      </div>
 
-      <Link to="/" style={{ ...styles.link, ...(pathname === "/" && styles.active) }}>
-        Dashboard
-      </Link>
-
-      <Link to="/devices" style={{ ...styles.link, ...(pathname === "/devices" && styles.active) }}>
-        Devices
-      </Link>
-
-      <Link to="/scans" style={{ ...styles.link, ...(pathname === "/scans" && styles.active) }}>
-        Scans
-      </Link>
-
-      <div style={{ flexGrow: 1 }} />
-    </div>
+      <nav className="sidebar-nav">
+        {NAV_ITEMS.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to === '/'}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+          >
+            {item.label}
+          </NavLink>
+        ))}
+      </nav>
+    </aside>
   );
-};
-
-const styles = {
-  sidebar: {
-    width: "220px",
-    backgroundColor: "#141414",
-    padding: "20px",
-    display: "flex",
-    flexDirection: "column",
-    borderRight: "1px solid #222",
-    height: "100dvh",
-    boxSizing: "border-box",
-  },
-  title: {
-    color: "#fff",
-    marginBottom: "25px",
-    fontSize: "22px",
-  },
-  link: {
-    padding: "10px 0",
-    color: "#aaa",
-    textDecoration: "none",
-    fontSize: "16px",
-    transition: "0.2s",
-  },
-  active: {
-    color: "#00b3ff",
-    fontWeight: "bold",
-  }
-};
-
-export default Sidebar;
+}
