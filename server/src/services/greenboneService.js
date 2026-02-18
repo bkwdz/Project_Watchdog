@@ -36,7 +36,8 @@ function getConfig() {
     socketPath: socketPath || null,
     useTls: !socketPath && (process.env.GREENBONE_TLS || 'true').toLowerCase() !== 'false',
     timeoutMs: Number(process.env.GREENBONE_TIMEOUT_MS || 20_000),
-    portRange: process.env.GREENBONE_PORT_RANGE || 'T:1-65535,U:1-65535',
+    // Default to full TCP only. Full UDP adds very long runtime and is rarely needed for routine scans.
+    portRange: process.env.GREENBONE_PORT_RANGE || 'T:1-65535',
     scanConfigId: process.env.GREENBONE_SCAN_CONFIG_ID || 'daba56c8-73ec-11df-a475-002264764cea',
     scannerId: process.env.GREENBONE_SCANNER_ID || '08b69003-5fc2-4037-a479-93b440211c73',
   };
