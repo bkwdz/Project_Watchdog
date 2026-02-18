@@ -126,6 +126,15 @@ services:
       - watchdog-internal
     restart: unless-stopped
 
+  gpg-data:
+    image: registry.community.greenbone.net/community/gpg-data:latest
+    mem_limit: 256m
+    restart: "no"
+    volumes:
+      - gpg_data:/mnt
+    networks:
+      - watchdog-internal
+
   redis-server:
     image: registry.community.greenbone.net/community/redis-server:latest
     mem_limit: 512m
@@ -177,6 +186,7 @@ services:
       OPENVASD_MODE: service_notus
       LISTENING: 0.0.0.0:9390
       OPENVASD_LOG: /var/log/openvas/openvasd.log
+      GNUPGHOME: /etc/openvas/gnupg
     mem_limit: 3g
     command:
       - /bin/sh
@@ -186,10 +196,12 @@ services:
         chmod 666 /var/log/openvas/openvas.log /var/log/openvas/openvasd.log
         exec /usr/local/bin/openvasd
     volumes:
+      - openvas_data:/etc/openvas
       - openvas_vt_data:/var/lib/openvas/plugins
       - notus_data:/var/lib/notus
       - openvas_logs:/var/log/openvas
       - redis_socket:/run/redis
+      - gpg_data:/etc/openvas/gnupg
     depends_on:
       redis-server:
         condition: service_healthy
@@ -197,9 +209,32 @@ services:
         condition: service_healthy
       notus-data:
         condition: service_healthy
+      gpg-data:
+        condition: service_completed_successfully
+      configure-openvas:
+        condition: service_completed_successfully
     networks:
       - watchdog-internal
     restart: unless-stopped
+
+  configure-openvas:
+    image: registry.community.greenbone.net/community/openvas-scanner:latest
+    mem_limit: 512m
+    command:
+      - /bin/sh
+      - -c
+      - |
+        printf "table_driven_lsc = yes\nopenvasd_server = http://openvas-scanner:9390\n" > /mnt/openvas.conf
+        sed "s/127/128/" /etc/openvas/openvas_log.conf | sed "s/gvm/openvas/" > /mnt/openvas_log.conf
+        chmod 644 /mnt/openvas.conf /mnt/openvas_log.conf
+        touch /var/log/openvas/openvas.log
+        chmod 666 /var/log/openvas/openvas.log
+    volumes:
+      - openvas_data:/mnt
+      - openvas_logs:/var/log/openvas
+    restart: "no"
+    networks:
+      - watchdog-internal
 
   ospd-openvas:
     image: registry.community.greenbone.net/community/ospd-openvas:latest
@@ -222,6 +257,8 @@ services:
           --openvasd-server=http://openvas-scanner:9390
     mem_limit: 2g
     volumes:
+      - gpg_data:/etc/openvas/gnupg
+      - openvas_data:/etc/openvas
       - openvas_vt_data:/var/lib/openvas/plugins
       - notus_data:/var/lib/notus
       - openvas_logs:/var/log/openvas
@@ -236,6 +273,10 @@ services:
         condition: service_healthy
       notus-data:
         condition: service_healthy
+      gpg-data:
+        condition: service_completed_successfully
+      configure-openvas:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(2); s.connect('/run/ospd/ospd-openvas.sock'); s.close()\""]
       interval: 15s
@@ -295,8 +336,10 @@ volumes:
   cert_data:
   data_objects:
   openvas_logs:
+  openvas_data:
   redis_data:
   redis_socket:
+  gpg_data:
   pg_data:
   pg_socket:
   gvmd_data:

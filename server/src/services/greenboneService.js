@@ -303,6 +303,7 @@ function connectSocket(config) {
 async function sendGmpCommand(socket, command) {
   return new Promise((resolve, reject) => {
     let buffer = '';
+    let settled = false;
 
     const cleanup = () => {
       socket.removeListener('data', onData);
@@ -311,9 +312,28 @@ async function sendGmpCommand(socket, command) {
       socket.removeListener('timeout', onTimeout);
     };
 
-    const onError = (error) => {
+    const resolveOnce = (value) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
       cleanup();
-      reject(new GreenboneServiceError('Vulnerability scanner connection failed', {
+      resolve(value);
+    };
+
+    const rejectOnce = (error) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const onError = (error) => {
+      rejectOnce(new GreenboneServiceError('Vulnerability scanner connection failed', {
         statusCode: 502,
         code: 'GREENBONE_CONNECTION_FAILED',
         details: error.message,
@@ -321,16 +341,56 @@ async function sendGmpCommand(socket, command) {
     };
 
     const onTimeout = () => {
-      cleanup();
-      reject(new GreenboneServiceError('Vulnerability scanner command timed out', {
+      rejectOnce(new GreenboneServiceError('Vulnerability scanner command timed out', {
         statusCode: 504,
         code: 'GREENBONE_TIMEOUT',
       }));
     };
 
-    const onClose = () => {
-      cleanup();
-      reject(new GreenboneServiceError('Vulnerability scanner closed the connection', {
+    const parseBuffer = async (allowInvalidXml) => {
+      const xml = String(buffer || '').replace(/\0/g, '').trim();
+
+      if (!xml) {
+        return false;
+      }
+
+      try {
+        const parsed = await parseXml(xml);
+        const { rootName, rootNode } = getRootNode(parsed);
+        ensureSuccessResponse(rootName, rootNode);
+        resolveOnce({
+          xml,
+          parsed,
+          rootName,
+          rootNode,
+        });
+        return true;
+      } catch (error) {
+        if (
+          !allowInvalidXml
+          && error instanceof GreenboneServiceError
+          && error.code === 'GREENBONE_INVALID_XML'
+        ) {
+          return false;
+        }
+
+        rejectOnce(error);
+        return true;
+      }
+    };
+
+    const onClose = async () => {
+      if (settled) {
+        return;
+      }
+
+      const handled = await parseBuffer(true);
+
+      if (handled || settled) {
+        return;
+      }
+
+      rejectOnce(new GreenboneServiceError('Vulnerability scanner closed the connection', {
         statusCode: 502,
         code: 'GREENBONE_CONNECTION_CLOSED',
       }));
@@ -338,29 +398,13 @@ async function sendGmpCommand(socket, command) {
 
     const onData = async (chunk) => {
       buffer += chunk.toString('utf8');
-      const nullIndex = buffer.indexOf('\0');
 
-      if (nullIndex === -1) {
+      if (buffer.includes('\0')) {
+        await parseBuffer(true);
         return;
       }
 
-      cleanup();
-
-      try {
-        const xml = buffer.slice(0, nullIndex);
-        const parsed = await parseXml(xml);
-        const { rootName, rootNode } = getRootNode(parsed);
-        ensureSuccessResponse(rootName, rootNode);
-
-        resolve({
-          xml,
-          parsed,
-          rootName,
-          rootNode,
-        });
-      } catch (error) {
-        reject(error);
-      }
+      await parseBuffer(false);
     };
 
     socket.on('data', onData);
@@ -368,7 +412,7 @@ async function sendGmpCommand(socket, command) {
     socket.once('close', onClose);
     socket.once('timeout', onTimeout);
 
-    socket.write(`${command}\0`);
+    socket.write(String(command || '').trim());
   });
 }
 
