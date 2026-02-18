@@ -1,0 +1,158 @@
+name: watchdog-scanner
+
+services:
+  vulnerability-tests:
+    image: registry.community.greenbone.net/community/vulnerability-tests:24.10
+    environment:
+      FEED_RELEASE: "24.10"
+      KEEP_ALIVE: "1"
+    volumes:
+      - openvas_vt_data:/mnt
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$(ls -A /mnt 2>/dev/null)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    networks:
+      - watchdog-internal
+    restart: unless-stopped
+
+  notus-data:
+    image: registry.community.greenbone.net/community/notus-data:24.10
+    environment:
+      FEED_RELEASE: "24.10"
+      KEEP_ALIVE: "1"
+    volumes:
+      - notus_data:/mnt
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$(ls -A /mnt 2>/dev/null)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    networks:
+      - watchdog-internal
+    restart: unless-stopped
+
+  redis:
+    image: registry.community.greenbone.net/community/redis-server:24.10
+    command:
+      - redis-server
+      - --save
+      - "900"
+      - "1"
+      - --appendonly
+      - "yes"
+      - --dir
+      - /data
+      - --unixsocket
+      - /run/redis/redis.sock
+      - --unixsocketperm
+      - "770"
+    volumes:
+      - redis_data:/data
+      - redis_socket:/run/redis
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -s /run/redis/redis.sock ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - watchdog-internal
+    restart: unless-stopped
+
+  openvas-scanner:
+    image: registry.community.greenbone.net/community/openvas-scanner:24.10
+    environment:
+      OPENVASD_MODE: service_notus
+      LISTENING: 0.0.0.0:9390
+      OPENVASD_LOG: /var/log/openvas/openvasd.log
+    command:
+      - /bin/sh
+      - -c
+      - |
+        touch /var/log/openvas/openvas.log /var/log/openvas/openvasd.log
+        chmod 666 /var/log/openvas/openvas.log /var/log/openvas/openvasd.log
+        exec /usr/local/bin/openvasd
+    volumes:
+      - openvas_vt_data:/var/lib/openvas/plugins
+      - notus_data:/var/lib/notus
+      - openvas_logs:/var/log/openvas
+    depends_on:
+      vulnerability-tests:
+        condition: service_healthy
+      notus-data:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /var/log/openvas/openvasd.log && test -n \"$(ls -A /var/lib/openvas/plugins 2>/dev/null)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - watchdog-internal
+    restart: unless-stopped
+
+  ospd-openvas:
+    image: registry.community.greenbone.net/community/ospd-openvas:24.10
+    hostname: ospd-openvas.local
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    command:
+      - /bin/sh
+      - -c
+      - |
+        touch /var/log/openvas/ospd-openvas.log
+        /usr/local/bin/ospd-openvas \
+          --daemon \
+          --bind-address=0.0.0.0 \
+          --port=9390 \
+          --log-file=/var/log/openvas/ospd-openvas.log \
+          --lock-file-dir=/run \
+          --socket-mode=0o770 \
+          --notus-feed-dir=/var/lib/notus/advisories \
+          --openvasd-server=http://openvas-scanner:9390
+        tail -F /var/log/openvas/ospd-openvas.log
+    volumes:
+      - openvas_vt_data:/var/lib/openvas/plugins
+      - notus_data:/var/lib/notus
+      - openvas_logs:/var/log/openvas
+      - redis_socket:/run/redis
+      - ospd_socket:/run/ospd
+    depends_on:
+      redis:
+        condition: service_healthy
+      openvas-scanner:
+        condition: service_healthy
+      vulnerability-tests:
+        condition: service_healthy
+      notus-data:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.create_connection(('127.0.0.1', 9390), 2); s.close()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - watchdog-internal
+    restart: unless-stopped
+
+volumes:
+  openvas_vt_data:
+  notus_data:
+  openvas_logs:
+  redis_data:
+  redis_socket:
+  ospd_socket:
+
+networks:
+  watchdog-internal:
+    external: true
+    name: watchdog-internal

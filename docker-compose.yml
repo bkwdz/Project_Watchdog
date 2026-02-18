@@ -27,8 +27,14 @@ services:
       - DATABASE_URL=postgresql://watchdog:watchdogpass@postgres:5432/watchdog
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost}
       - SESSION_SECRET=${SESSION_SECRET:-dev_secret}
+      - GREENBONE_ENABLED=${GREENBONE_ENABLED:-true}
+      - GREENBONE_HOST=${GREENBONE_HOST:-openvas-scanner}
+      - GREENBONE_PORT=${GREENBONE_PORT:-9390}
+      - GREENBONE_TLS=${GREENBONE_TLS:-false}
+      - GREENBONE_TIMEOUT_MS=${GREENBONE_TIMEOUT_MS:-60000}
     networks:
       - watchdog_net
+      - watchdog-internal
     restart: unless-stopped
 
   nginx:
@@ -50,4 +56,7 @@ volumes:
 
 networks:
   watchdog_net:
+    driver: bridge
+  watchdog-internal:
+    name: watchdog-internal
     driver: bridge
