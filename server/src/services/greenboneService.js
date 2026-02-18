@@ -185,6 +185,123 @@ function parseCve(value) {
   return match || null;
 }
 
+function collectNodesByKey(node, key, bucket = []) {
+  if (!node || typeof node !== 'object') {
+    return bucket;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(node, key)) {
+    toArray(node[key]).forEach((entry) => {
+      if (entry && typeof entry === 'object') {
+        bucket.push(entry);
+      }
+    });
+  }
+
+  Object.values(node).forEach((value) => {
+    if (Array.isArray(value)) {
+      value.forEach((entry) => collectNodesByKey(entry, key, bucket));
+      return;
+    }
+
+    if (value && typeof value === 'object') {
+      collectNodesByKey(value, key, bucket);
+    }
+  });
+
+  return bucket;
+}
+
+function normalizeName(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+async function resolveScanConfigId(socket, requestedId) {
+  const response = await sendGmpCommand(
+    socket,
+    '<get_configs details="0" ignore_pagination="1" />',
+  );
+
+  const configs = collectNodesByKey(response.rootNode, 'config', []);
+  const entries = configs
+    .map((configNode) => ({
+      id: configNode?.$?.id || null,
+      name: extractText(configNode?.name),
+    }))
+    .filter((entry) => entry.id);
+
+  if (entries.length === 0) {
+    throw new GreenboneServiceError('No scan configurations are available in the vulnerability manager', {
+      statusCode: 502,
+      code: 'GREENBONE_CONFIG_NOT_FOUND',
+    });
+  }
+
+  if (requestedId) {
+    const requested = entries.find((entry) => entry.id === requestedId);
+
+    if (requested) {
+      return requested.id;
+    }
+  }
+
+  const preferredNames = [
+    'full and fast',
+    'full and fast ultimate',
+    'system discovery',
+    'host discovery',
+    'base',
+  ];
+
+  for (const preferredName of preferredNames) {
+    const found = entries.find((entry) => normalizeName(entry.name) === preferredName);
+
+    if (found) {
+      return found.id;
+    }
+  }
+
+  return entries[0].id;
+}
+
+async function resolveScannerId(socket, requestedId) {
+  const response = await sendGmpCommand(
+    socket,
+    '<get_scanners details="0" ignore_pagination="1" />',
+  );
+
+  const scanners = collectNodesByKey(response.rootNode, 'scanner', []);
+  const entries = scanners
+    .map((scannerNode) => ({
+      id: scannerNode?.$?.id || null,
+      name: extractText(scannerNode?.name),
+    }))
+    .filter((entry) => entry.id);
+
+  if (entries.length === 0) {
+    throw new GreenboneServiceError('No scanners are available in the vulnerability manager', {
+      statusCode: 502,
+      code: 'GREENBONE_SCANNER_NOT_FOUND',
+    });
+  }
+
+  if (requestedId) {
+    const requested = entries.find((entry) => entry.id === requestedId);
+
+    if (requested) {
+      return requested.id;
+    }
+  }
+
+  const openvasScanner = entries.find((entry) => normalizeName(entry.name).includes('openvas'));
+
+  if (openvasScanner) {
+    return openvasScanner.id;
+  }
+
+  return entries[0].id;
+}
+
 function mapTaskStatus(statusText) {
   const normalized = String(statusText || '').toLowerCase();
 
@@ -551,6 +668,8 @@ async function startScan(target) {
 
   return withAuthenticatedSession(async (socket, config) => {
     const suffix = Date.now();
+    const resolvedConfigId = await resolveScanConfigId(socket, config.scanConfigId);
+    const resolvedScannerId = await resolveScannerId(socket, config.scannerId);
 
     const createTargetResponse = await sendGmpCommand(
       socket,
@@ -576,9 +695,9 @@ async function startScan(target) {
       `
         <create_task>
           <name>Watchdog Task ${xmlEscape(safeTarget)} ${suffix}</name>
-          <config id="${xmlEscape(config.scanConfigId)}" />
+          <config id="${xmlEscape(resolvedConfigId)}" />
           <target id="${xmlEscape(targetId)}" />
-          <scanner id="${xmlEscape(config.scannerId)}" />
+          <scanner id="${xmlEscape(resolvedScannerId)}" />
         </create_task>
       `,
     );
