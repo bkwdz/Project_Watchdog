@@ -9,11 +9,11 @@ services:
     volumes:
       - openvas_vt_data:/mnt
     healthcheck:
-      test: ["CMD-SHELL", "test -n \"$(ls -A /mnt 2>/dev/null)\""]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.create_connection(('127.0.0.1', 9390), 2); s.close()\""]
+      interval: 20s
+      timeout: 5s
       retries: 20
-      start_period: 30s
+      start_period: 60s
     networks:
       - watchdog-internal
     restart: unless-stopped
