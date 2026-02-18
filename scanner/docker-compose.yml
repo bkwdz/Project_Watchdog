@@ -8,12 +8,6 @@ services:
     mem_limit: 768m
     volumes:
       - openvas_vt_data:/mnt
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.create_connection(('127.0.0.1', 9390), 2); s.close()\""]
-      interval: 20s
-      timeout: 5s
-      retries: 20
-      start_period: 60s
     networks:
       - watchdog-internal
     restart: unless-stopped
@@ -85,8 +79,6 @@ services:
       - redis_socket:/run/redis
     depends_on:
       redis-server:
-        condition: service_healthy
-      vulnerability-tests:
         condition: service_healthy
       notus-data:
         condition: service_healthy
