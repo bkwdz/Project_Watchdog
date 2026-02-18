@@ -50,13 +50,13 @@ function AppLayout() {
   const pageTitle = resolveTitle(location.pathname);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${showShell ? '' : 'app-shell-public'}`.trim()}>
       {showShell && <Sidebar />}
 
       <div className="app-main">
         {showShell && <Topbar title={pageTitle} />}
 
-        <main className="app-content">
+        <main className={`app-content ${showShell ? '' : 'app-content-public'}`.trim()}>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />

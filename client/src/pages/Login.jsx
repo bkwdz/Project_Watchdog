@@ -48,7 +48,7 @@ export default function Login() {
       <form className="auth-card" onSubmit={handleSubmit}>
         <p className="brand-overline">Watchdog</p>
         <h2>Sign In</h2>
-        <p className="muted">Access your SOC dashboard.</p>
+        <p className="muted">Access your dashboard.</p>
 
         {message && <p className="success-text">{message}</p>}
         {error && <p className="error-text">{error}</p>}

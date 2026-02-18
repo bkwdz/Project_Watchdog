@@ -89,6 +89,10 @@ select:focus {
   background: linear-gradient(180deg, rgba(11, 19, 38, 0.86), rgba(8, 15, 32, 0.92));
 }
 
+.app-shell-public {
+  grid-template-columns: 1fr;
+}
+
 .sidebar {
   position: sticky;
   top: 0;
@@ -210,6 +214,10 @@ select:focus {
   padding: 24px;
   overflow-y: auto;
   min-height: 0;
+}
+
+.app-content-public {
+  padding: 0;
 }
 
 .page-stack {
@@ -648,23 +656,24 @@ select:focus {
 }
 
 .auth-screen {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px 24px;
+  width: 100%;
+  padding: 36px 24px;
 }
 
 .auth-card {
   width: 100%;
-  max-width: 460px;
+  max-width: 480px;
   background: linear-gradient(168deg, rgba(16, 28, 54, 0.96), rgba(12, 21, 43, 0.95));
   border: 1px solid var(--border-soft);
   box-shadow: var(--shadow-lg);
   border-radius: var(--radius-lg);
-  padding: 28px;
+  padding: 30px;
   display: grid;
-  gap: 14px;
+  gap: 16px;
 }
 
 .muted {
@@ -745,12 +754,11 @@ select:focus {
 
   .auth-screen {
     padding: 18px 14px;
-    align-items: stretch;
+    min-height: 100dvh;
   }
 
   .auth-card {
     max-width: 100%;
     padding: 22px 18px;
-    margin: auto 0;
   }
 }
