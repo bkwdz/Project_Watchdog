@@ -33,6 +33,8 @@ services:
       - GREENBONE_TLS=${GREENBONE_TLS:-false}
       - GREENBONE_SOCKET_PATH=${GREENBONE_SOCKET_PATH:-/run/gvmd/gvmd.sock}
       - GREENBONE_TIMEOUT_MS=${GREENBONE_TIMEOUT_MS:-60000}
+      - GREENBONE_PORT_RANGE=${GREENBONE_PORT_RANGE:-T:1-65535}
+      - GREENBONE_SCAN_CONFIG_ID=${GREENBONE_SCAN_CONFIG_ID:-daba56c8-73ec-11df-a475-002264764cea}
     volumes:
       - gvmd_socket:/run/gvmd
     networks:

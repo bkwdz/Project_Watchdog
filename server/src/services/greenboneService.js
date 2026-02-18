@@ -822,17 +822,18 @@ async function getTaskStatus(taskId) {
     const rawStatus = extractText(taskNode.status);
     const mappedStatus = mapTaskStatus(rawStatus);
     const progressValue = Number.parseInt(extractText(taskNode.progress), 10);
-    const progressPercent = Number.isFinite(progressValue)
+    const boundedProgress = Number.isFinite(progressValue)
       ? Math.max(0, Math.min(100, progressValue))
-      : mappedStatus === 'completed'
-        ? 100
-        : mappedStatus === 'running'
-          ? 10
-          : 0;
+      : null;
+    const progressPercent = mappedStatus === 'completed'
+      ? 100
+      : mappedStatus === 'running'
+        ? Math.max(1, boundedProgress ?? 10)
+        : boundedProgress ?? 0;
 
     return {
       status: mappedStatus,
-      progress_percent: mappedStatus === 'completed' ? 100 : progressPercent,
+      progress_percent: progressPercent,
       report_id: extractReportIdFromTask(taskNode),
       raw_status: rawStatus,
     };
