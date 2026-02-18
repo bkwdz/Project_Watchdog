@@ -12,12 +12,14 @@ export default function DataTable({
   emptyMessage = 'No records found.',
   rowKey = 'id',
   onRowClick,
+  wrapperClassName = '',
+  tableClassName = '',
 }) {
   const hasRows = Array.isArray(rows) && rows.length > 0;
 
   return (
-    <div className="table-wrapper">
-      <table className="ui-table">
+    <div className={`table-wrapper ${wrapperClassName}`.trim()}>
+      <table className={`ui-table ${tableClassName}`.trim()}>
         <thead>
           <tr>
             {columns.map((column) => (

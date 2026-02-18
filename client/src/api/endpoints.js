@@ -5,6 +5,11 @@ export async function getDevices() {
   return response.data;
 }
 
+export async function getDevicesSummary() {
+  const response = await api.get('/devices/summary');
+  return response.data;
+}
+
 export async function getDeviceById(deviceId) {
   const response = await api.get(`/devices/${deviceId}`);
   return response.data;
@@ -30,11 +35,19 @@ export async function getScansList() {
   return response.data;
 }
 
-export async function createVulnerabilityScan(target, scanConfigId = '') {
+export async function createVulnerabilityScan(target, scanConfigId = '', { tcpPorts = '', udpPorts = '' } = {}) {
   const payload = { target };
 
   if (scanConfigId) {
     payload.scan_config_id = scanConfigId;
+  }
+
+  if (typeof tcpPorts === 'string') {
+    payload.tcp_ports = tcpPorts;
+  }
+
+  if (typeof udpPorts === 'string') {
+    payload.udp_ports = udpPorts;
   }
 
   const response = await api.post('/scans/vuln', payload);

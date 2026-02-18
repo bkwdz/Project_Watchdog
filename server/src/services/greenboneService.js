@@ -186,6 +186,108 @@ function parseCve(value) {
   return match || null;
 }
 
+function isValidPortToken(token) {
+  const trimmed = String(token || '').trim();
+
+  if (!trimmed) {
+    return false;
+  }
+
+  const singleMatch = trimmed.match(/^(\d{1,5})$/);
+
+  if (singleMatch) {
+    const port = Number(singleMatch[1]);
+    return Number.isInteger(port) && port >= 1 && port <= 65535;
+  }
+
+  const rangeMatch = trimmed.match(/^(\d{1,5})-(\d{1,5})$/);
+
+  if (!rangeMatch) {
+    return false;
+  }
+
+  const start = Number(rangeMatch[1]);
+  const end = Number(rangeMatch[2]);
+
+  return Number.isInteger(start)
+    && Number.isInteger(end)
+    && start >= 1
+    && end >= 1
+    && start <= 65535
+    && end <= 65535
+    && start <= end;
+}
+
+function isValidGreenbonePortRange(value) {
+  const normalized = String(value || '').trim();
+
+  if (!normalized) {
+    return false;
+  }
+
+  const normalizedUpper = normalized.toUpperCase();
+  const sections = [];
+  let cursor = 0;
+
+  while (cursor < normalized.length) {
+    const protocol = normalizedUpper[cursor];
+
+    if ((protocol !== 'T' && protocol !== 'U') || normalized[cursor + 1] !== ':') {
+      return false;
+    }
+
+    const valueStart = cursor + 2;
+    const nextTcp = normalizedUpper.indexOf(',T:', valueStart);
+    const nextUdp = normalizedUpper.indexOf(',U:', valueStart);
+    const sectionEndCandidates = [nextTcp, nextUdp].filter((index) => index >= 0);
+    const sectionEnd = sectionEndCandidates.length > 0
+      ? Math.min(...sectionEndCandidates)
+      : normalized.length;
+
+    const sectionValue = normalized.slice(valueStart, sectionEnd).trim();
+
+    if (!sectionValue) {
+      return false;
+    }
+
+    sections.push({
+      protocol,
+      value: sectionValue,
+    });
+
+    if (sectionEnd >= normalized.length) {
+      break;
+    }
+
+    cursor = sectionEnd + 1;
+  }
+
+  if (sections.length === 0 || sections.length > 2) {
+    return false;
+  }
+
+  const seenProtocols = new Set();
+
+  for (const section of sections) {
+    const list = section.value
+      .split(',')
+      .map((token) => token.trim())
+      .filter(Boolean);
+
+    if (seenProtocols.has(section.protocol) || list.length === 0) {
+      return false;
+    }
+
+    seenProtocols.add(section.protocol);
+
+    if (!list.every(isValidPortToken)) {
+      return false;
+    }
+  }
+
+  return seenProtocols.size > 0;
+}
+
 function collectNodesByKey(node, key, bucket = []) {
   if (!node || typeof node !== 'object') {
     return bucket;
@@ -726,6 +828,7 @@ async function startScan(target, options = {}) {
 
   const safeTarget = String(target || '').trim();
   const requestedScanConfigId = String(options.scanConfigId || '').trim() || null;
+  const requestedPortRange = String(options.portRange || '').trim() || null;
 
   if (!safeTarget) {
     throw new GreenboneServiceError('Target is required', {
@@ -738,6 +841,15 @@ async function startScan(target, options = {}) {
     const suffix = Date.now();
     const resolvedConfigId = await resolveScanConfigId(socket, requestedScanConfigId || config.scanConfigId);
     const resolvedScannerId = await resolveScannerId(socket, config.scannerId);
+    const resolvedPortRange = requestedPortRange || String(config.portRange || '').trim();
+
+    if (!isValidGreenbonePortRange(resolvedPortRange)) {
+      throw new GreenboneServiceError('Invalid Greenbone port range format', {
+        statusCode: 400,
+        code: 'GREENBONE_INVALID_PORT_RANGE',
+        details: resolvedPortRange || null,
+      });
+    }
 
     const createTargetResponse = await sendGmpCommand(
       socket,
@@ -745,7 +857,7 @@ async function startScan(target, options = {}) {
         <create_target>
           <name>Watchdog-${xmlEscape(safeTarget)}-${suffix}</name>
           <hosts>${xmlEscape(safeTarget)}</hosts>
-          <port_range>${xmlEscape(config.portRange)}</port_range>
+          <port_range>${xmlEscape(resolvedPortRange)}</port_range>
         </create_target>
       `,
     );

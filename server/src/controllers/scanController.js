@@ -31,6 +31,91 @@ function normalizeTarget(target) {
   return typeof target === 'string' ? target.trim() : '';
 }
 
+function normalizeOptionalText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parsePortSpec(spec, fieldName) {
+  const normalized = normalizeOptionalText(spec);
+
+  if (!normalized) {
+    return '';
+  }
+
+  if (fieldName === 'udp_ports' && normalized === '0') {
+    return '';
+  }
+
+  const tokens = normalized
+    .split(',')
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  if (tokens.length === 0) {
+    return '';
+  }
+
+  const validatedTokens = tokens.map((token) => {
+    const singleMatch = token.match(/^(\d{1,5})$/);
+
+    if (singleMatch) {
+      const port = Number(singleMatch[1]);
+
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`${fieldName} contains an out-of-range port: ${token}`);
+      }
+
+      return `${port}`;
+    }
+
+    const rangeMatch = token.match(/^(\d{1,5})-(\d{1,5})$/);
+
+    if (!rangeMatch) {
+      throw new Error(`${fieldName} contains an invalid token: ${token}`);
+    }
+
+    const start = Number(rangeMatch[1]);
+    const end = Number(rangeMatch[2]);
+
+    if (
+      !Number.isInteger(start)
+      || !Number.isInteger(end)
+      || start < 1
+      || end < 1
+      || start > 65535
+      || end > 65535
+      || start > end
+    ) {
+      throw new Error(`${fieldName} contains an invalid range: ${token}`);
+    }
+
+    return `${start}-${end}`;
+  });
+
+  return validatedTokens.join(',');
+}
+
+function buildGreenbonePortRange(tcpPortsRaw, udpPortsRaw) {
+  const tcpPorts = parsePortSpec(tcpPortsRaw, 'tcp_ports');
+  const udpPorts = parsePortSpec(udpPortsRaw, 'udp_ports');
+
+  if (!tcpPorts && !udpPorts) {
+    return null;
+  }
+
+  const sections = [];
+
+  if (tcpPorts) {
+    sections.push(`T:${tcpPorts}`);
+  }
+
+  if (udpPorts) {
+    sections.push(`U:${udpPorts}`);
+  }
+
+  return sections.join(',');
+}
+
 function normalizeScanType(scanType) {
   if (typeof scanType !== 'string') {
     return 'standard';
@@ -468,12 +553,17 @@ exports.createVulnerabilityScan = async (req, res, next) => {
     }
 
     const target = normalizeTarget(req.body.target);
-    const scanConfigId = typeof req.body.scan_config_id === 'string'
-      ? req.body.scan_config_id.trim()
-      : '';
+    const scanConfigId = normalizeOptionalText(req.body.scan_config_id);
+    let portRange = null;
 
-    if (!isValidIPv4(target)) {
-      return res.status(400).json({ error: 'target must be a valid IPv4 address' });
+    try {
+      portRange = buildGreenbonePortRange(req.body.tcp_ports, req.body.udp_ports);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    if (!isValidTarget(target)) {
+      return res.status(400).json({ error: 'target must be a valid IPv4 address or CIDR range' });
     }
 
     const queuedResult = await query(
@@ -490,6 +580,7 @@ exports.createVulnerabilityScan = async (req, res, next) => {
     try {
       const job = await startGreenboneScan(target, {
         scanConfigId: scanConfigId || undefined,
+        portRange: portRange || undefined,
       });
 
       const runningScan = await updateScan(queuedScan.id, {

@@ -52,6 +52,24 @@ function severityClass(severity) {
   return 'severity-low';
 }
 
+function normalizeSeverityBucket(value) {
+  const normalized = String(value || '').toLowerCase().trim();
+
+  if (normalized.includes('critical')) {
+    return 'critical';
+  }
+
+  if (normalized.includes('high')) {
+    return 'high';
+  }
+
+  if (normalized.includes('medium')) {
+    return 'medium';
+  }
+
+  return 'low';
+}
+
 export default function DeviceDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -70,6 +88,8 @@ export default function DeviceDetail() {
   const [vulnConfigs, setVulnConfigs] = useState([]);
   const [vulnConfigId, setVulnConfigId] = useState('');
   const [vulnConfigsLoaded, setVulnConfigsLoaded] = useState(false);
+  const [vulnTcpPorts, setVulnTcpPorts] = useState('1-1000');
+  const [vulnUdpPorts, setVulnUdpPorts] = useState('');
 
   const {
     scans,
@@ -231,7 +251,10 @@ export default function DeviceDetail() {
     setVulnTriggering(true);
 
     try {
-      const scan = await createVulnerabilityScan(targetIp, vulnConfigId);
+      const scan = await createVulnerabilityScan(targetIp, vulnConfigId, {
+        tcpPorts: vulnTcpPorts,
+        udpPorts: vulnUdpPorts,
+      });
       registerScan(scan);
       pushToast(`Vulnerability scan #${scan.id} started.`, 'success');
       window.dispatchEvent(new CustomEvent('watchdog:scan-created', { detail: scan }));
@@ -269,6 +292,44 @@ export default function DeviceDetail() {
     () => (Array.isArray(device?.vulnerabilities) ? device.vulnerabilities : []),
     [device],
   );
+
+  const deviceSnapshot = useMemo(() => {
+    const openPorts = portRows.filter((row) => String(row.state || '').toLowerCase() === 'open');
+    const tcpOpen = openPorts.filter((row) => String(row.protocol || '').toLowerCase() === 'tcp').length;
+    const udpOpen = openPorts.filter((row) => String(row.protocol || '').toLowerCase() === 'udp').length;
+
+    const severityCounts = {
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+    };
+
+    vulnerabilityRows.forEach((row) => {
+      const bucket = normalizeSeverityBucket(row.cvss_severity || row.severity);
+      severityCounts[bucket] += 1;
+    });
+
+    const serviceCounts = new Map();
+    openPorts.forEach((row) => {
+      const key = String(row.service || 'unknown').toLowerCase();
+      serviceCounts.set(key, (serviceCounts.get(key) || 0) + 1);
+    });
+
+    const topServices = [...serviceCounts.entries()]
+      .map(([service, count]) => ({ service, count }))
+      .sort((a, b) => b.count - a.count || a.service.localeCompare(b.service))
+      .slice(0, 5);
+
+    return {
+      totalOpenPorts: openPorts.length,
+      tcpOpen,
+      udpOpen,
+      vulnerabilityTotal: vulnerabilityRows.length,
+      severityCounts,
+      topServices,
+    };
+  }, [portRows, vulnerabilityRows]);
 
   const portsColumns = useMemo(
     () => [
@@ -429,6 +490,31 @@ export default function DeviceDetail() {
                 </option>
               ))}
             </select>
+
+            <div className="vuln-port-row">
+              <div className="field-stack vuln-port-field">
+                <label htmlFor="vuln-tcp-ports">TCP Ports</label>
+                <input
+                  id="vuln-tcp-ports"
+                  type="text"
+                  placeholder="1-1000"
+                  value={vulnTcpPorts}
+                  disabled={!vulnEnabled || !vulnStatusLoaded || vulnTriggering || loading || !device}
+                  onChange={(event) => setVulnTcpPorts(event.target.value)}
+                />
+              </div>
+              <div className="field-stack vuln-port-field">
+                <label htmlFor="vuln-udp-ports">UDP Ports</label>
+                <input
+                  id="vuln-udp-ports"
+                  type="text"
+                  placeholder="blank or 0 = disabled"
+                  value={vulnUdpPorts}
+                  disabled={!vulnEnabled || !vulnStatusLoaded || vulnTriggering || loading || !device}
+                  onChange={(event) => setVulnUdpPorts(event.target.value)}
+                />
+              </div>
+            </div>
           </div>
         </div>
 
@@ -447,17 +533,98 @@ export default function DeviceDetail() {
         )}
       </Card>
 
-      <Card title="Ports" subtitle="Observed service exposure by protocol and state.">
-        <DataTable columns={portsColumns} rows={portRows} emptyMessage="No port data for this device yet." />
+      <Card title="Security Snapshot" subtitle="Current exposure and vulnerability posture for this host.">
+        <div className="device-kpi-grid">
+          <article className="kpi-tile">
+            <p className="kpi-label">Open Ports</p>
+            <p className="kpi-value">{deviceSnapshot.totalOpenPorts}</p>
+          </article>
+          <article className="kpi-tile">
+            <p className="kpi-label">TCP Open</p>
+            <p className="kpi-value">{deviceSnapshot.tcpOpen}</p>
+          </article>
+          <article className="kpi-tile">
+            <p className="kpi-label">UDP Open</p>
+            <p className="kpi-value">{deviceSnapshot.udpOpen}</p>
+          </article>
+          <article className="kpi-tile">
+            <p className="kpi-label">Vulnerabilities</p>
+            <p className="kpi-value">{deviceSnapshot.vulnerabilityTotal}</p>
+          </article>
+        </div>
+
+        <div className="device-insight-grid">
+          <article className="insight-panel">
+            <h4>Severity Distribution</h4>
+            <div className="severity-bars">
+              {['critical', 'high', 'medium', 'low'].map((bucket) => {
+                const count = deviceSnapshot.severityCounts[bucket];
+                const denominator = deviceSnapshot.vulnerabilityTotal || 1;
+                const width = Math.round((count / denominator) * 100);
+
+                return (
+                  <div key={bucket} className="severity-bar-row">
+                    <span className="severity-name">{bucket}</span>
+                    <div className="severity-bar-track">
+                      <div className={`severity-bar-fill severity-${bucket}`} style={{ width: `${width}%` }} />
+                    </div>
+                    <span className="severity-count">{count}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </article>
+
+          <article className="insight-panel">
+            <h4>Top Open Services</h4>
+            {deviceSnapshot.topServices.length === 0 && <p className="muted">No open services observed yet.</p>}
+            {deviceSnapshot.topServices.length > 0 && (
+              <div className="service-bars">
+                {deviceSnapshot.topServices.map((row) => {
+                  const maxCount = deviceSnapshot.topServices[0].count || 1;
+                  const width = Math.round((row.count / maxCount) * 100);
+
+                  return (
+                    <div key={row.service} className="service-bar-row">
+                      <span className="service-name">{row.service}</span>
+                      <div className="service-bar-track">
+                        <div className="service-bar-fill" style={{ width: `${width}%` }} />
+                      </div>
+                      <span className="service-count">{row.count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </article>
+        </div>
       </Card>
 
-      <Card title="Vulnerabilities" subtitle="Known findings from Greenbone reports for this host.">
-        <DataTable
-          columns={vulnerabilityColumns}
-          rows={vulnerabilityRows}
-          emptyMessage="No vulnerabilities reported for this device yet."
-        />
-      </Card>
+      <section className="device-data-grid">
+        <Card title="Ports" subtitle="Observed service exposure by protocol and state." className="device-panel-card">
+          <DataTable
+            columns={portsColumns}
+            rows={portRows}
+            emptyMessage="No port data for this device yet."
+            wrapperClassName="table-wrapper-compact"
+            tableClassName="ui-table-compact"
+          />
+        </Card>
+
+        <Card
+          title="Vulnerabilities"
+          subtitle="Known findings from Greenbone reports for this host."
+          className="device-panel-card"
+        >
+          <DataTable
+            columns={vulnerabilityColumns}
+            rows={vulnerabilityRows}
+            emptyMessage="No vulnerabilities reported for this device yet."
+            wrapperClassName="table-wrapper-compact"
+            tableClassName="ui-table-compact"
+          />
+        </Card>
+      </section>
 
       <Card title="Scan History" subtitle="Scans whose target includes this host.">
         {scansLoading && <p className="muted">Loading scan history...</p>}

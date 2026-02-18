@@ -4,6 +4,7 @@ const controller = require('../controllers/deviceController');
 const { requireAuth } = require('../middleware/auth');
 
 router.use(requireAuth);
+router.get('/summary', controller.summary);
 router.get('/', controller.list);
 router.get('/:id', controller.get);
 

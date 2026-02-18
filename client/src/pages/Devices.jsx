@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createScan, getDevices } from '../api/endpoints';
+import {
+  createScan,
+  createVulnerabilityScan,
+  getDevices,
+  getVulnerabilityScanConfigs,
+  getVulnerabilityScannerStatus,
+} from '../api/endpoints';
 import Card from '../components/Card';
 import Modal from '../components/Modal';
 import ToastStack from '../components/ToastStack';
@@ -32,8 +38,17 @@ export default function Devices() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [rangeTarget, setRangeTarget] = useState('');
+  const [rangeScanner, setRangeScanner] = useState('nmap');
   const [rangeType, setRangeType] = useState('discovery');
+  const [rangeTcpPorts, setRangeTcpPorts] = useState('1-1000');
+  const [rangeUdpPorts, setRangeUdpPorts] = useState('');
   const [submittingScan, setSubmittingScan] = useState(false);
+  const [vulnEnabled, setVulnEnabled] = useState(false);
+  const [vulnStatusLoaded, setVulnStatusLoaded] = useState(false);
+  const [vulnStatusMessage, setVulnStatusMessage] = useState('');
+  const [vulnConfigs, setVulnConfigs] = useState([]);
+  const [vulnConfigId, setVulnConfigId] = useState('');
+  const [vulnConfigsLoaded, setVulnConfigsLoaded] = useState(false);
 
   const loadDevices = useCallback(async () => {
     setError('');
@@ -51,6 +66,78 @@ export default function Devices() {
   useEffect(() => {
     void loadDevices();
   }, [loadDevices]);
+
+  const loadVulnerabilityStatus = useCallback(async () => {
+    setVulnStatusLoaded(false);
+    setVulnStatusMessage('');
+
+    try {
+      await getVulnerabilityScannerStatus();
+      setVulnEnabled(true);
+    } catch (err) {
+      if (err?.response?.status === 503) {
+        setVulnEnabled(false);
+        setVulnStatusMessage('Vulnerability scanner is not active.');
+      } else {
+        setVulnEnabled(false);
+        setVulnStatusMessage('Unable to reach vulnerability scanner.');
+      }
+    } finally {
+      setVulnStatusLoaded(true);
+    }
+  }, []);
+
+  const loadVulnerabilityConfigs = useCallback(async () => {
+    setVulnConfigsLoaded(false);
+
+    try {
+      const data = await getVulnerabilityScanConfigs();
+      const configs = Array.isArray(data?.configs) ? data.configs : [];
+      const defaultConfigId = String(data?.default_scan_config_id || '').trim();
+
+      setVulnConfigs(configs);
+
+      if (configs.length === 0) {
+        setVulnConfigId('');
+        setVulnStatusMessage('No vulnerability scan configurations are available in Greenbone yet.');
+      } else {
+        const selectedId = defaultConfigId && configs.some((config) => config.id === defaultConfigId)
+          ? defaultConfigId
+          : configs[0].id;
+        setVulnConfigId(selectedId);
+        setVulnStatusMessage('');
+      }
+    } catch (err) {
+      setVulnConfigs([]);
+      setVulnConfigId('');
+      setVulnStatusMessage(err?.response?.data?.error || 'Unable to load vulnerability scan configurations.');
+    } finally {
+      setVulnConfigsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!modalOpen || rangeScanner !== 'greenbone') {
+      return;
+    }
+
+    void loadVulnerabilityStatus();
+  }, [loadVulnerabilityStatus, modalOpen, rangeScanner]);
+
+  useEffect(() => {
+    if (!modalOpen || rangeScanner !== 'greenbone' || !vulnStatusLoaded) {
+      return;
+    }
+
+    if (!vulnEnabled) {
+      setVulnConfigs([]);
+      setVulnConfigId('');
+      setVulnConfigsLoaded(true);
+      return;
+    }
+
+    void loadVulnerabilityConfigs();
+  }, [loadVulnerabilityConfigs, modalOpen, rangeScanner, vulnEnabled, vulnStatusLoaded]);
 
   const orderedDevices = useMemo(
     () =>
@@ -73,14 +160,37 @@ export default function Devices() {
     setSubmittingScan(true);
 
     try {
-      const scan = await createScan({ target, scan_type: rangeType });
-      pushToast(`Network scan #${scan.id} queued.`, 'success');
+      let scan;
+
+      if (rangeScanner === 'greenbone') {
+        if (!vulnEnabled) {
+          throw new Error(vulnStatusMessage || 'Vulnerability scanner is not active.');
+        }
+
+        if (!vulnConfigId) {
+          throw new Error('No vulnerability scan profile is available.');
+        }
+
+        scan = await createVulnerabilityScan(target, vulnConfigId, {
+          tcpPorts: rangeTcpPorts,
+          udpPorts: rangeUdpPorts,
+        });
+
+        pushToast(`Vulnerability scan #${scan.id} queued for ${target}.`, 'success');
+      } else {
+        scan = await createScan({ target, scan_type: rangeType });
+        pushToast(`Network scan #${scan.id} queued.`, 'success');
+      }
+
       window.dispatchEvent(new CustomEvent('watchdog:scan-created', { detail: scan }));
       setModalOpen(false);
       setRangeTarget('');
       setRangeType('discovery');
+      setRangeScanner('nmap');
+      setRangeTcpPorts('1-1000');
+      setRangeUdpPorts('');
     } catch (err) {
-      pushToast(err?.response?.data?.error || 'Unable to start range scan.', 'error');
+      pushToast(err?.response?.data?.error || err?.message || 'Unable to start range scan.', 'error');
     } finally {
       setSubmittingScan(false);
     }
@@ -145,13 +255,64 @@ export default function Devices() {
         </div>
 
         <div className="field-stack">
-          <label htmlFor="rangeType">Scan Type</label>
-          <select id="rangeType" value={rangeType} onChange={(event) => setRangeType(event.target.value)}>
-            <option value="discovery">discovery</option>
-            <option value="standard">standard</option>
-            <option value="aggressive">aggressive</option>
+          <label htmlFor="rangeScanner">Scanner</label>
+          <select id="rangeScanner" value={rangeScanner} onChange={(event) => setRangeScanner(event.target.value)}>
+            <option value="nmap">nmap (host/port discovery)</option>
+            <option value="greenbone">greenbone (vulnerability)</option>
           </select>
         </div>
+
+        <div className="field-stack">
+          <label htmlFor={rangeScanner === 'nmap' ? 'rangeType' : 'rangeVulnProfile'}>
+            {rangeScanner === 'nmap' ? 'Scan Type' : 'Scan Profile'}
+          </label>
+          {rangeScanner === 'nmap' ? (
+            <select id="rangeType" value={rangeType} onChange={(event) => setRangeType(event.target.value)}>
+              <option value="discovery">discovery</option>
+              <option value="standard">standard</option>
+              <option value="aggressive">aggressive</option>
+              <option value="full">full</option>
+            </select>
+          ) : (
+            <>
+              <select id="rangeVulnProfile" value={vulnConfigId} onChange={(event) => setVulnConfigId(event.target.value)}>
+                {vulnConfigs.length === 0 && <option value="">No scan profiles available</option>}
+                {vulnConfigs.map((config) => (
+                  <option key={config.id} value={config.id}>
+                    {config.name || config.id}
+                  </option>
+                ))}
+              </select>
+              {!vulnConfigsLoaded && vulnEnabled && <p className="muted">Loading vulnerability scan profiles...</p>}
+              {vulnStatusLoaded && vulnStatusMessage && <p className="warning-text">{vulnStatusMessage}</p>}
+            </>
+          )}
+        </div>
+
+        {rangeScanner === 'greenbone' && (
+          <>
+            <div className="field-stack">
+              <label htmlFor="rangeTcpPorts">TCP Ports</label>
+              <input
+                id="rangeTcpPorts"
+                type="text"
+                placeholder="1-1000"
+                value={rangeTcpPorts}
+                onChange={(event) => setRangeTcpPorts(event.target.value)}
+              />
+            </div>
+            <div className="field-stack">
+              <label htmlFor="rangeUdpPorts">UDP Ports</label>
+              <input
+                id="rangeUdpPorts"
+                type="text"
+                placeholder="blank or 0 = disabled"
+                value={rangeUdpPorts}
+                onChange={(event) => setRangeUdpPorts(event.target.value)}
+              />
+            </div>
+          </>
+        )}
 
         <div className="modal-actions">
           <button type="button" className="ghost-button" onClick={() => setModalOpen(false)}>

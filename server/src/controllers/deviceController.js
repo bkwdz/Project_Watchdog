@@ -1,5 +1,81 @@
 const { query } = require('../db');
 
+exports.summary = async (req, res, next) => {
+  try {
+    const totalsResult = await query(
+      `
+        SELECT
+          (SELECT COUNT(*)::int FROM devices) AS total_devices,
+          (SELECT COUNT(*)::int FROM scans) AS total_scans,
+          (SELECT COUNT(*)::int FROM scans WHERE status = 'running') AS running_scans,
+          (SELECT COUNT(*)::int FROM scans WHERE status = 'queued') AS queued_scans,
+          (SELECT COUNT(*)::int FROM scans WHERE status = 'failed') AS failed_scans,
+          (SELECT COUNT(*)::int FROM scans WHERE status = 'completed') AS completed_scans,
+          (SELECT COUNT(*)::int FROM ports WHERE state = 'open') AS total_open_ports,
+          (SELECT COUNT(*)::int FROM vulnerabilities) AS vulnerabilities_total,
+          (SELECT COUNT(DISTINCT device_id)::int FROM vulnerabilities) AS vulnerable_devices,
+          (SELECT COUNT(*)::int FROM vulnerabilities WHERE COALESCE(cvss_severity, severity) ILIKE 'critical') AS critical_count,
+          (SELECT COUNT(*)::int FROM vulnerabilities WHERE COALESCE(cvss_severity, severity) ILIKE 'high') AS high_count,
+          (SELECT COUNT(*)::int FROM vulnerabilities WHERE COALESCE(cvss_severity, severity) ILIKE 'medium') AS medium_count,
+          (SELECT COUNT(*)::int FROM vulnerabilities WHERE COALESCE(cvss_severity, severity) ILIKE 'low') AS low_count
+      `,
+    );
+
+    const topPortsResult = await query(
+      `
+        SELECT
+          port,
+          protocol,
+          COUNT(*)::int AS count
+        FROM ports
+        WHERE state = 'open'
+        GROUP BY port, protocol
+        ORDER BY count DESC, port ASC
+        LIMIT 10
+      `,
+    );
+
+    const topServicesResult = await query(
+      `
+        SELECT
+          COALESCE(NULLIF(service, ''), 'unknown') AS service,
+          COUNT(*)::int AS count
+        FROM ports
+        WHERE state = 'open'
+        GROUP BY COALESCE(NULLIF(service, ''), 'unknown')
+        ORDER BY count DESC, service ASC
+        LIMIT 10
+      `,
+    );
+
+    const activeScansResult = await query(
+      `
+        SELECT
+          id,
+          target,
+          scan_type,
+          COALESCE(scanner_type, 'nmap') AS scanner_type,
+          status,
+          progress_percent,
+          started_at
+        FROM scans
+        WHERE status IN ('queued', 'running')
+        ORDER BY started_at DESC NULLS LAST, id DESC
+        LIMIT 12
+      `,
+    );
+
+    return res.json({
+      totals: totalsResult.rows[0],
+      top_ports: topPortsResult.rows,
+      top_services: topServicesResult.rows,
+      active_scans: activeScansResult.rows,
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 exports.list = async (req, res, next) => {
   try {
     const result = await query(

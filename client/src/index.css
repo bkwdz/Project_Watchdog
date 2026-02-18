@@ -290,6 +290,10 @@ select:focus {
   border-color: rgba(52, 211, 153, 0.38);
 }
 
+.stat-danger {
+  border-color: rgba(255, 107, 107, 0.4);
+}
+
 .primary-button,
 .ghost-button,
 .danger-button,
@@ -482,6 +486,17 @@ select:focus {
   min-width: 260px;
   max-width: 380px;
   flex: 1 1 260px;
+}
+
+.vuln-port-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.vuln-port-field label {
+  font-size: 12px;
 }
 
 .progress-track {
@@ -739,13 +754,217 @@ select:focus {
   border-color: rgba(168, 24, 24, 0.7);
 }
 
+.dashboard-stats-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.active-scan-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.active-scan-item {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: rgba(12, 22, 44, 0.5);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.active-scan-main {
+  display: grid;
+  gap: 4px;
+}
+
+.active-scan-title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.active-scan-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.active-scan-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+
+.dashboard-split-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hotspot-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hotspot-title {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.device-kpi-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.kpi-tile {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: rgba(13, 26, 54, 0.55);
+  padding: 12px;
+}
+
+.kpi-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.kpi-value {
+  margin-top: 8px;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.device-insight-grid {
+  margin-top: 14px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.insight-panel {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: rgba(13, 24, 49, 0.55);
+  padding: 12px;
+}
+
+.insight-panel h4 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.severity-bars,
+.service-bars {
+  display: grid;
+  gap: 8px;
+}
+
+.severity-bar-row,
+.service-bar-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) 38px;
+  gap: 8px;
+  align-items: center;
+}
+
+.severity-name,
+.service-name {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.severity-bar-track,
+.service-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+
+.severity-bar-fill,
+.service-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.severity-bar-fill.severity-critical {
+  background: linear-gradient(90deg, #b31212, #ff5d5d);
+}
+
+.severity-bar-fill.severity-high {
+  background: linear-gradient(90deg, #8a1b1b, #ff7f7f);
+}
+
+.severity-bar-fill.severity-medium {
+  background: linear-gradient(90deg, #8a5d11, #ffae57);
+}
+
+.severity-bar-fill.severity-low {
+  background: linear-gradient(90deg, #746110, #f5c451);
+}
+
+.service-bar-fill {
+  background: linear-gradient(90deg, rgba(57, 201, 255, 0.5), rgba(57, 201, 255, 0.95));
+}
+
+.severity-count,
+.service-count {
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-main);
+}
+
+.device-data-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.device-panel-card .ui-card-body {
+  padding-top: 14px;
+}
+
+.table-wrapper-compact .ui-table-compact {
+  min-width: 0;
+}
+
+.ui-table-compact th,
+.ui-table-compact td {
+  padding: 9px 10px;
+  font-size: 13px;
+}
+
 @media (max-width: 1080px) {
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .dashboard-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .device-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-split-grid,
+  .device-insight-grid,
+  .device-data-grid,
+  .hotspot-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -791,6 +1010,10 @@ select:focus {
     min-width: 0;
     max-width: none;
     width: 100%;
+  }
+
+  .vuln-port-row {
+    grid-template-columns: 1fr;
   }
 }
 
