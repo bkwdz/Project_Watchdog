@@ -90,12 +90,6 @@ services:
         condition: service_healthy
       notus-data:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "test -n \"$(ls -A /var/lib/openvas/plugins 2>/dev/null)\" && python3 -c \"import socket; s=socket.create_connection(('127.0.0.1', 9390), 2); s.close()\""]
-      interval: 20s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
     networks:
       - watchdog-internal
     restart: unless-stopped
@@ -134,7 +128,7 @@ services:
       redis-server:
         condition: service_healthy
       openvas-scanner:
-        condition: service_healthy
+        condition: service_started
       vulnerability-tests:
         condition: service_healthy
       notus-data:
