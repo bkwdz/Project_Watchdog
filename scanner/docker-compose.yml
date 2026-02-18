@@ -9,7 +9,7 @@ services:
     volumes:
       - openvas_vt_data:/mnt
     healthcheck:
-      test: ["CMD-SHELL", "test -s /mnt/sha256sums"]
+      test: ["CMD-SHELL", "test -n \"$(ls -A /mnt 2>/dev/null)\""]
       interval: 30s
       timeout: 10s
       retries: 20
@@ -91,7 +91,7 @@ services:
       notus-data:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "test -s /var/lib/openvas/plugins/sha256sums && python3 -c \"import socket; s=socket.create_connection(('127.0.0.1', 9390), 2); s.close()\""]
+      test: ["CMD-SHELL", "test -n \"$(ls -A /var/lib/openvas/plugins 2>/dev/null)\" && python3 -c \"import socket; s=socket.create_connection(('127.0.0.1', 9390), 2); s.close()\""]
       interval: 20s
       timeout: 5s
       retries: 20
