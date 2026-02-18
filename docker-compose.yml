@@ -29,8 +29,20 @@ services:
       - DATABASE_URL=postgresql://watchdog:watchdogpass@postgres:5432/watchdog
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost}
       - SESSION_SECRET=${SESSION_SECRET:-dev_secret}
+      - GREENBONE_ENABLED=${GREENBONE_ENABLED:-false}
+      - GREENBONE_HOST=greenbone
+      - GREENBONE_PORT=9390
     networks:
       - watchdog_net
+    restart: unless-stopped
+
+  greenbone:
+    image: greenbone/community-edition
+    profiles: ["vuln"]
+    networks:
+      - watchdog_net
+    volumes:
+      - gvm_data:/var/lib/gvm
     restart: unless-stopped
 
   nginx:
@@ -49,6 +61,7 @@ services:
 
 volumes:
   postgres_data:
+  gvm_data:
 
 networks:
   watchdog_net:

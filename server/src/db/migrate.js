@@ -1,4 +1,5 @@
 const { query } = require('../db');
+const greenboneMigration = require('./migrations/002_greenbone');
 
 const SCHEMA_STATEMENTS = [
   `
@@ -25,12 +26,14 @@ const SCHEMA_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS scans (
       id SERIAL PRIMARY KEY,
       target TEXT NOT NULL,
-      scan_type VARCHAR(32) NOT NULL CHECK (scan_type IN ('discovery', 'quick', 'standard', 'aggressive', 'full')),
+      scan_type VARCHAR(32) NOT NULL CHECK (scan_type IN ('discovery', 'quick', 'standard', 'aggressive', 'full', 'vulnerability')),
+      scanner_type VARCHAR(16) NOT NULL DEFAULT 'nmap' CHECK (scanner_type IN ('nmap', 'greenbone')),
       status VARCHAR(16) NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed')),
       progress_percent INTEGER CHECK (progress_percent BETWEEN 0 AND 100),
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
-      initiated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+      initiated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      external_task_id TEXT
     );
   `,
   `
@@ -49,8 +52,13 @@ const SCHEMA_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS vulnerabilities (
       id SERIAL PRIMARY KEY,
       device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      scan_id INTEGER REFERENCES scans(id) ON DELETE CASCADE,
+      port INTEGER,
       cve VARCHAR(64),
+      name TEXT,
       severity VARCHAR(32),
+      cvss_score DOUBLE PRECISION,
+      cvss_severity VARCHAR(32),
       description TEXT,
       source VARCHAR(64)
     );
@@ -62,6 +70,8 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_ports_state ON ports(state);`,
   `CREATE INDEX IF NOT EXISTS idx_vulnerabilities_device ON vulnerabilities(device_id);`,
   `CREATE INDEX IF NOT EXISTS idx_vulnerabilities_cve ON vulnerabilities(cve);`,
+  `CREATE INDEX IF NOT EXISTS idx_vulnerabilities_scan_id ON vulnerabilities(scan_id);`,
+  ...greenboneMigration,
 ];
 
 async function migrate() {

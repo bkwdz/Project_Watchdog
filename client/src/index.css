@@ -688,6 +688,44 @@ select:focus {
   color: #87e4ba;
 }
 
+.warning-text {
+  color: #ffd88a;
+}
+
+.severity-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.severity-low {
+  color: #f5c451;
+  background: rgba(245, 196, 81, 0.16);
+  border-color: rgba(245, 196, 81, 0.34);
+}
+
+.severity-medium {
+  color: #ffae57;
+  background: rgba(255, 174, 87, 0.16);
+  border-color: rgba(255, 174, 87, 0.34);
+}
+
+.severity-high {
+  color: #ff7f7f;
+  background: rgba(255, 127, 127, 0.16);
+  border-color: rgba(255, 127, 127, 0.35);
+}
+
+.severity-critical {
+  color: #ffd7d7;
+  background: rgba(122, 0, 0, 0.45);
+  border-color: rgba(168, 24, 24, 0.7);
+}
+
 @media (max-width: 1080px) {
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -29,3 +29,13 @@ export async function getScansList() {
   const response = await api.get('/scans');
   return response.data;
 }
+
+export async function createVulnerabilityScan(target) {
+  const response = await api.post('/scans/vuln', { target });
+  return response.data;
+}
+
+export async function getVulnerabilityScannerStatus() {
+  const response = await api.get('/scans/vuln/status');
+  return response.data;
+}

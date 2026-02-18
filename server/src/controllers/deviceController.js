@@ -68,6 +68,26 @@ exports.get = async (req, res, next) => {
       [deviceId],
     );
 
+    const vulnerabilitiesResult = await query(
+      `
+        SELECT
+          id,
+          scan_id,
+          cve,
+          name,
+          severity,
+          cvss_score,
+          cvss_severity,
+          port,
+          description,
+          source
+        FROM vulnerabilities
+        WHERE device_id = $1
+        ORDER BY cvss_score DESC NULLS LAST, id DESC
+      `,
+      [deviceId],
+    );
+
     return res.json({
       ...device,
       ip: device.ip_address,
@@ -75,6 +95,7 @@ exports.get = async (req, res, next) => {
       mac: device.mac_address,
       lastSeen: device.last_seen,
       ports: portsResult.rows,
+      vulnerabilities: vulnerabilitiesResult.rows,
     });
   } catch (err) {
     return next(err);

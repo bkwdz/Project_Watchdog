@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { createScan, getDeviceById, getScanById } from '../api/endpoints';
+import {
+  createScan,
+  createVulnerabilityScan,
+  getDeviceById,
+  getScanById,
+  getVulnerabilityScannerStatus,
+} from '../api/endpoints';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import ProgressBar from '../components/ProgressBar';
@@ -27,6 +33,24 @@ function scanRelatesToDevice(scan, deviceIp) {
   return false;
 }
 
+function severityClass(severity) {
+  const normalized = String(severity || '').toLowerCase();
+
+  if (normalized === 'critical') {
+    return 'severity-critical';
+  }
+
+  if (normalized === 'high') {
+    return 'severity-high';
+  }
+
+  if (normalized === 'medium') {
+    return 'severity-medium';
+  }
+
+  return 'severity-low';
+}
+
 export default function DeviceDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -37,6 +61,11 @@ export default function DeviceDetail() {
   const [error, setError] = useState('');
   const [triggeringType, setTriggeringType] = useState('');
   const [activeScan, setActiveScan] = useState(null);
+
+  const [vulnEnabled, setVulnEnabled] = useState(false);
+  const [vulnStatusLoaded, setVulnStatusLoaded] = useState(false);
+  const [vulnTriggering, setVulnTriggering] = useState(false);
+  const [vulnStatusMessage, setVulnStatusMessage] = useState('');
 
   const {
     scans,
@@ -60,9 +89,30 @@ export default function DeviceDetail() {
     }
   }, [id]);
 
+  const loadVulnerabilityStatus = useCallback(async () => {
+    setVulnStatusLoaded(false);
+    setVulnStatusMessage('');
+
+    try {
+      await getVulnerabilityScannerStatus();
+      setVulnEnabled(true);
+    } catch (err) {
+      if (err?.response?.status === 503) {
+        setVulnEnabled(false);
+        setVulnStatusMessage('Vulnerability scanner is not active.');
+      } else {
+        setVulnEnabled(false);
+        setVulnStatusMessage('Unable to reach vulnerability scanner.');
+      }
+    } finally {
+      setVulnStatusLoaded(true);
+    }
+  }, []);
+
   useEffect(() => {
     void loadDevice();
-  }, [loadDevice]);
+    void loadVulnerabilityStatus();
+  }, [loadDevice, loadVulnerabilityStatus]);
 
   useEffect(() => {
     if (!activeScan?.id) {
@@ -117,6 +167,36 @@ export default function DeviceDetail() {
     }
   };
 
+  const startVulnScan = async () => {
+    const targetIp = device?.ip_address || device?.ip;
+
+    if (!targetIp) {
+      pushToast('Device IP is not available for vulnerability scanning.', 'error');
+      return;
+    }
+
+    setVulnTriggering(true);
+
+    try {
+      const scan = await createVulnerabilityScan(targetIp);
+      registerScan(scan);
+      pushToast(`Vulnerability scan #${scan.id} started.`, 'success');
+      window.dispatchEvent(new CustomEvent('watchdog:scan-created', { detail: scan }));
+      navigate(`/scans/${scan.id}`);
+    } catch (err) {
+      const apiMessage = err?.response?.data?.error;
+
+      if (err?.response?.status === 503) {
+        setVulnEnabled(false);
+        setVulnStatusMessage('Vulnerability scanner is not active.');
+      }
+
+      pushToast(apiMessage || 'Unable to start vulnerability scan.', 'error');
+    } finally {
+      setVulnTriggering(false);
+    }
+  };
+
   const relatedScans = useMemo(() => {
     if (!device?.ip_address) {
       return [];
@@ -132,6 +212,10 @@ export default function DeviceDetail() {
   }, [device?.ip_address, scans]);
 
   const portRows = useMemo(() => (Array.isArray(device?.ports) ? device.ports : []), [device]);
+  const vulnerabilityRows = useMemo(
+    () => (Array.isArray(device?.vulnerabilities) ? device.vulnerabilities : []),
+    [device],
+  );
 
   const portsColumns = useMemo(
     () => [
@@ -148,11 +232,51 @@ export default function DeviceDetail() {
     [],
   );
 
+  const vulnerabilityColumns = useMemo(
+    () => [
+      { key: 'cve', header: 'CVE' },
+      { key: 'name', header: 'Name' },
+      {
+        key: 'cvss_severity',
+        header: 'Severity',
+        render: (row) => {
+          const label = row.cvss_severity || row.severity || 'Low';
+          return <span className={`severity-chip ${severityClass(label)}`}>{label}</span>;
+        },
+      },
+      {
+        key: 'cvss_score',
+        header: 'CVSS',
+        align: 'right',
+        render: (row) => {
+          const score = Number.parseFloat(row.cvss_score);
+          return Number.isFinite(score) ? score.toFixed(1) : '-';
+        },
+      },
+      {
+        key: 'port',
+        header: 'Port',
+        align: 'right',
+        render: (row) => row.port ?? '-',
+      },
+      {
+        key: 'description',
+        header: 'Description',
+        render: (row) => row.description || '-',
+      },
+    ],
+    [],
+  );
+
   const historyColumns = useMemo(
     () => [
       { key: 'id', header: 'ID' },
       { key: 'target', header: 'Target' },
-      { key: 'scan_type', header: 'Type' },
+      {
+        key: 'scan_type',
+        header: 'Type',
+        render: (scan) => (scan.scanner_type === 'greenbone' ? 'vulnerability' : scan.scan_type),
+      },
       { key: 'status', header: 'Status', render: (scan) => <StatusBadge status={scan.status} /> },
       { key: 'started_at', header: 'Started', render: (scan) => formatDateTime(scan.started_at) },
       {
@@ -212,7 +336,7 @@ export default function DeviceDetail() {
         )}
       </Card>
 
-      <Card title="Actions" subtitle="Start a targeted scan profile for this host.">
+      <Card title="Actions" subtitle="Start targeted discovery and vulnerability scans for this host.">
         <div className="button-row">
           {['quick', 'standard', 'aggressive', 'full'].map((scanType) => (
             <button
@@ -225,7 +349,19 @@ export default function DeviceDetail() {
               {triggeringType === scanType ? 'Starting...' : `${scanType[0].toUpperCase()}${scanType.slice(1)} Scan`}
             </button>
           ))}
+
+          <button
+            type="button"
+            className="danger-button"
+            disabled={!vulnEnabled || !vulnStatusLoaded || vulnTriggering || loading || !device}
+            title={vulnEnabled ? 'Run Greenbone vulnerability scan' : 'Vulnerability scanner not enabled'}
+            onClick={startVulnScan}
+          >
+            {vulnTriggering ? 'Starting...' : 'Vulnerability Scan'}
+          </button>
         </div>
+
+        {!vulnEnabled && vulnStatusLoaded && <p className="warning-text">{vulnStatusMessage || 'Vulnerability scanner is not active.'}</p>}
 
         {activeScan && (
           <div className="scan-inline-status">
@@ -241,6 +377,14 @@ export default function DeviceDetail() {
 
       <Card title="Ports" subtitle="Observed service exposure by protocol and state.">
         <DataTable columns={portsColumns} rows={portRows} emptyMessage="No port data for this device yet." />
+      </Card>
+
+      <Card title="Vulnerabilities" subtitle="Known findings from Greenbone reports for this host.">
+        <DataTable
+          columns={vulnerabilityColumns}
+          rows={vulnerabilityRows}
+          emptyMessage="No vulnerabilities reported for this device yet."
+        />
       </Card>
 
       <Card title="Scan History" subtitle="Scans whose target includes this host.">

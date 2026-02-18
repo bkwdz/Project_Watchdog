@@ -5,10 +5,13 @@ const { requireAuth } = require('../middleware/auth');
 
 router.use(requireAuth);
 
+router.get('/', controller.listScans);
+router.get('/vuln/status', controller.getVulnerabilityStatus);
+router.post('/vuln', controller.createVulnerabilityScan);
 router.post('/', controller.createScan);
-router.get('/:id', controller.getScan);
 
 // Backward-compatible alias for the current frontend.
 router.post('/start', controller.startScan);
+router.get('/:id', controller.getScan);
 
 module.exports = router;

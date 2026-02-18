@@ -1,0 +1,17 @@
+module.exports = [
+  `ALTER TABLE scans ADD COLUMN IF NOT EXISTS scanner_type VARCHAR(16);`,
+  `ALTER TABLE scans ADD COLUMN IF NOT EXISTS external_task_id TEXT;`,
+  `UPDATE scans SET scanner_type = 'nmap' WHERE scanner_type IS NULL;`,
+  `ALTER TABLE scans ALTER COLUMN scanner_type SET DEFAULT 'nmap';`,
+  `ALTER TABLE scans ALTER COLUMN scanner_type SET NOT NULL;`,
+  `ALTER TABLE scans DROP CONSTRAINT IF EXISTS scans_scan_type_check;`,
+  `ALTER TABLE scans ADD CONSTRAINT scans_scan_type_check CHECK (scan_type IN ('discovery', 'quick', 'standard', 'aggressive', 'full', 'vulnerability'));`,
+  `ALTER TABLE scans DROP CONSTRAINT IF EXISTS scans_scanner_type_check;`,
+  `ALTER TABLE scans ADD CONSTRAINT scans_scanner_type_check CHECK (scanner_type IN ('nmap', 'greenbone'));`,
+  `ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS scan_id INTEGER REFERENCES scans(id) ON DELETE CASCADE;`,
+  `ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS port INTEGER;`,
+  `ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS cvss_score DOUBLE PRECISION;`,
+  `ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS cvss_severity VARCHAR(32);`,
+  `ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS name TEXT;`,
+  `CREATE INDEX IF NOT EXISTS idx_vulnerabilities_scan_id ON vulnerabilities(scan_id);`,
+];

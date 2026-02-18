@@ -85,7 +85,7 @@ async function upsertDeviceAndPorts(scanType, host) {
 async function processScan(scanId) {
   const scanResult = await query(
     `
-      SELECT id, target, scan_type
+      SELECT id, target, scan_type, COALESCE(scanner_type, 'nmap') AS scanner_type
       FROM scans
       WHERE id = $1
       LIMIT 1
@@ -96,6 +96,10 @@ async function processScan(scanId) {
   const scan = scanResult.rows[0];
 
   if (!scan) {
+    return;
+  }
+
+  if (scan.scanner_type !== 'nmap') {
     return;
   }
 
@@ -179,6 +183,7 @@ async function resumeQueuedScans() {
       SELECT id
       FROM scans
       WHERE status IN ('queued', 'running')
+        AND COALESCE(scanner_type, 'nmap') = 'nmap'
       ORDER BY id ASC
     `,
   );

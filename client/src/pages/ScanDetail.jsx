@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getDevices, getScanById } from '../api/endpoints';
 import Card from '../components/Card';
+import DataTable from '../components/DataTable';
 import ProgressBar from '../components/ProgressBar';
 import StatusBadge from '../components/StatusBadge';
 import { cidrContains, isCidr, isIpv4 } from '../utils/ip';
@@ -23,6 +24,24 @@ function scanIncludesDevice(scanTarget, deviceIp) {
   return false;
 }
 
+function severityClass(severity) {
+  const normalized = String(severity || '').toLowerCase();
+
+  if (normalized === 'critical') {
+    return 'severity-critical';
+  }
+
+  if (normalized === 'high') {
+    return 'severity-high';
+  }
+
+  if (normalized === 'medium') {
+    return 'severity-medium';
+  }
+
+  return 'severity-low';
+}
+
 export default function ScanDetail() {
   const { id } = useParams();
   const [scan, setScan] = useState(null);
@@ -39,7 +58,11 @@ export default function ScanDetail() {
       setScan(data);
       return data;
     } catch (err) {
-      setError(err?.response?.data?.error || 'Unable to load scan');
+      if (err?.response?.status === 503) {
+        setError('Vulnerability scanner is not active.');
+      } else {
+        setError(err?.response?.data?.error || 'Unable to load scan');
+      }
       return null;
     } finally {
       setLoading(false);
@@ -94,6 +117,46 @@ export default function ScanDetail() {
   }, [devices, scan]);
 
   const summary = scan?.summary || {};
+  const vulnerabilities = useMemo(
+    () => (Array.isArray(scan?.vulnerabilities) ? scan.vulnerabilities : []),
+    [scan?.vulnerabilities],
+  );
+
+  const vulnerabilityColumns = useMemo(
+    () => [
+      { key: 'cve', header: 'CVE' },
+      { key: 'name', header: 'Name' },
+      {
+        key: 'cvss_severity',
+        header: 'Severity',
+        render: (row) => {
+          const label = row.cvss_severity || row.severity || 'Low';
+          return <span className={`severity-chip ${severityClass(label)}`}>{label}</span>;
+        },
+      },
+      {
+        key: 'cvss_score',
+        header: 'CVSS',
+        align: 'right',
+        render: (row) => {
+          const score = Number.parseFloat(row.cvss_score);
+          return Number.isFinite(score) ? score.toFixed(1) : '-';
+        },
+      },
+      {
+        key: 'port',
+        header: 'Port',
+        align: 'right',
+        render: (row) => row.port ?? '-',
+      },
+      {
+        key: 'description',
+        header: 'Description',
+        render: (row) => row.description || '-',
+      },
+    ],
+    [],
+  );
 
   return (
     <div className="page-stack">
@@ -110,6 +173,10 @@ export default function ScanDetail() {
             <div>
               <dt>Type</dt>
               <dd>{scan.scan_type}</dd>
+            </div>
+            <div>
+              <dt>Scanner</dt>
+              <dd>{scan.scanner_type || 'nmap'}</dd>
             </div>
             <div>
               <dt>Status</dt>
@@ -143,16 +210,43 @@ export default function ScanDetail() {
       <Card title="Summary" subtitle="Scan output summary from backend aggregation.">
         {scan && (scan.status === 'completed' || scan.status === 'failed') && (
           <ul className="summary-list">
-            <li>
-              Hosts up:
-              {' '}
-              <strong>{summary.hosts_up ?? 0}</strong>
-            </li>
-            <li>
-              Ports observed:
-              {' '}
-              <strong>{summary.ports_observed ?? 0}</strong>
-            </li>
+            {scan.scanner_type === 'greenbone' ? (
+              <>
+                <li>
+                  Vulnerabilities:
+                  {' '}
+                  <strong>{summary.vulnerabilities_total ?? 0}</strong>
+                </li>
+                <li>
+                  Critical:
+                  {' '}
+                  <strong>{summary.critical_count ?? 0}</strong>
+                </li>
+                <li>
+                  High:
+                  {' '}
+                  <strong>{summary.high_count ?? 0}</strong>
+                </li>
+                <li>
+                  Affected Devices:
+                  {' '}
+                  <strong>{summary.affected_devices ?? 0}</strong>
+                </li>
+              </>
+            ) : (
+              <>
+                <li>
+                  Hosts up:
+                  {' '}
+                  <strong>{summary.hosts_up ?? 0}</strong>
+                </li>
+                <li>
+                  Ports observed:
+                  {' '}
+                  <strong>{summary.ports_observed ?? 0}</strong>
+                </li>
+              </>
+            )}
           </ul>
         )}
 
@@ -160,6 +254,16 @@ export default function ScanDetail() {
           <p className="muted">Summary will be available after completion.</p>
         )}
       </Card>
+
+      {scan?.scanner_type === 'greenbone' && (
+        <Card title="Vulnerabilities" subtitle="Findings reported by Greenbone for this scan.">
+          <DataTable
+            columns={vulnerabilityColumns}
+            rows={vulnerabilities}
+            emptyMessage="No vulnerabilities reported for this scan."
+          />
+        </Card>
+      )}
 
       <Card title="Discovered Devices" subtitle="Devices that match this scan target.">
         {devicesError && <p className="error-text">{devicesError}</p>}
