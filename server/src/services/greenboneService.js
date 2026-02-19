@@ -371,7 +371,6 @@ function normalizeName(value) {
 
 const PRIMARY_SCAN_CONFIG_ORDER = [
   'full and fast',
-  'full and fast ultimate',
   'discovery',
   'host discovery',
   'system discovery',
@@ -432,9 +431,9 @@ function selectScanConfigId(entries, requestedId) {
 
   const preferredNames = [
     'full and fast',
-    'full and fast ultimate',
     'system discovery',
     'host discovery',
+    'discovery',
     'base',
   ];
 

@@ -591,9 +591,107 @@ select:focus {
 }
 
 .vuln-profile-select {
+  position: relative;
   min-width: 0;
   max-width: none;
   width: 100%;
+}
+
+.hover-profile-select {
+  position: relative;
+  width: 100%;
+}
+
+.hover-profile-trigger {
+  width: 100%;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-input);
+  color: var(--text-main);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+}
+
+.hover-profile-trigger:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.hover-profile-trigger:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.hover-profile-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hover-profile-caret {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 140ms ease;
+}
+
+.hover-profile-caret.open {
+  transform: rotate(180deg);
+}
+
+.hover-profile-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: rgba(7, 15, 31, 0.98);
+  box-shadow: var(--shadow-md);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 30;
+}
+
+.hover-profile-option {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  color: var(--text-main);
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 14px;
+}
+
+.hover-profile-option:last-child {
+  border-bottom: 0;
+}
+
+.hover-profile-option:hover {
+  background: rgba(57, 201, 255, 0.12);
+}
+
+.hover-profile-option.selected {
+  background: rgba(57, 201, 255, 0.2);
+}
+
+.hover-profile-tooltip {
+  position: fixed;
+  max-width: 340px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: rgba(7, 15, 31, 0.98);
+  color: var(--text-main);
+  box-shadow: var(--shadow-md);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  z-index: 60;
 }
 
 .vuln-port-row {

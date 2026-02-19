@@ -8,6 +8,7 @@ import {
   getVulnerabilityScannerStatus,
 } from '../api/endpoints';
 import Card from '../components/Card';
+import HoverProfileSelect from '../components/HoverProfileSelect';
 import Modal from '../components/Modal';
 import ToastStack from '../components/ToastStack';
 import useToast from '../hooks/useToast';
@@ -282,14 +283,14 @@ export default function Devices() {
             </select>
           ) : (
             <>
-              <select id="rangeVulnProfile" value={vulnConfigId} onChange={(event) => setVulnConfigId(event.target.value)}>
-                {vulnConfigs.length === 0 && <option value="">No scan profiles available</option>}
-                {vulnConfigs.map((config) => (
-                  <option key={config.id} value={config.id}>
-                    {config.name || config.id}
-                  </option>
-                ))}
-              </select>
+              <HoverProfileSelect
+                id="rangeVulnProfile"
+                ariaLabel="Vulnerability Scan Profile"
+                value={vulnConfigId}
+                options={vulnConfigs}
+                disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || submittingScan}
+                onChange={setVulnConfigId}
+              />
               {!vulnConfigsLoaded && vulnEnabled && <p className="muted">Loading vulnerability scan profiles...</p>}
               {vulnStatusLoaded && vulnStatusMessage && <p className="warning-text">{vulnStatusMessage}</p>}
             </>

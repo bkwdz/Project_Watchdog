@@ -11,6 +11,7 @@ import {
 } from '../api/endpoints';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
+import HoverProfileSelect from '../components/HoverProfileSelect';
 import PieChart from '../components/PieChart';
 import ProgressBar from '../components/ProgressBar';
 import StatusBadge from '../components/StatusBadge';
@@ -657,21 +658,15 @@ export default function DeviceDetail() {
                 {vulnTriggering ? 'Starting...' : 'Vulnerability Scan'}
               </button>
 
-              <select
+              <HoverProfileSelect
                 id="vuln-config-select"
                 className="vuln-profile-select"
-                aria-label="Vulnerability Scan Profile"
+                ariaLabel="Vulnerability Scan Profile"
                 value={vulnConfigId}
+                options={vulnConfigs}
                 disabled={!vulnEnabled || !vulnStatusLoaded || !vulnConfigsLoaded || vulnTriggering || loading || !device}
-                onChange={(event) => setVulnConfigId(event.target.value)}
-              >
-                {vulnConfigs.length === 0 && <option value="">No scan profiles available</option>}
-                {vulnConfigs.map((config) => (
-                  <option key={config.id} value={config.id}>
-                    {config.name || config.id}
-                  </option>
-                ))}
-              </select>
+                onChange={setVulnConfigId}
+              />
 
               <div className="vuln-port-row">
                 <div className="field-stack vuln-port-field">
