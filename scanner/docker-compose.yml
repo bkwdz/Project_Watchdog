@@ -69,7 +69,18 @@ services:
     networks:
       - watchdog-internal
     restart: unless-stopped
-
+  gsa:
+    image: registry.community.greenbone.net/community/gsa:latest
+    restart: unless-stopped
+    ports:
+      - "9392:80"
+    volumes:
+      - gvmd_socket:/run/gvmd
+    depends_on:
+      gvmd:
+        condition: service_healthy
+    networks:
+      - watchdog-internal
   dfn-cert-data:
     image: registry.community.greenbone.net/community/dfn-cert-data:latest
     environment:
