@@ -40,7 +40,15 @@ export async function getScansList() {
   return response.data;
 }
 
-export async function createVulnerabilityScan(target, scanConfigId = '', { tcpPorts = '', udpPorts = '' } = {}) {
+export async function createVulnerabilityScan(
+  target,
+  scanConfigId = '',
+  {
+    tcpPorts = '',
+    udpPorts = '',
+    credentials = null,
+  } = {},
+) {
   const payload = { target };
 
   if (scanConfigId) {
@@ -55,6 +63,10 @@ export async function createVulnerabilityScan(target, scanConfigId = '', { tcpPo
     payload.udp_ports = udpPorts;
   }
 
+  if (credentials && typeof credentials === 'object') {
+    payload.credentials = credentials;
+  }
+
   const response = await api.post('/scans/vuln', payload);
   return response.data;
 }
@@ -66,6 +78,15 @@ export async function getVulnerabilityScannerStatus() {
 
 export async function getVulnerabilityScanConfigs() {
   const response = await api.get('/scans/vuln/configs');
+  return response.data;
+}
+
+export async function getVulnerabilityCredentials(type) {
+  const response = await api.get('/scans/vuln/credentials', {
+    params: {
+      type,
+    },
+  });
   return response.data;
 }
 

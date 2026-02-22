@@ -740,6 +740,39 @@ select:focus {
   font-size: 12px;
 }
 
+.vuln-status-inline {
+  margin-top: 2px;
+}
+
+.credential-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-main);
+}
+
+.checkbox-inline input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+}
+
+.credential-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.credential-span-all {
+  grid-column: 1 / -1;
+}
+
 .progress-track {
   position: relative;
   width: 100%;
@@ -1511,6 +1544,10 @@ select:focus {
   }
 
   .vuln-port-row {
+    grid-template-columns: 1fr;
+  }
+
+  .credential-grid {
     grid-template-columns: 1fr;
   }
 

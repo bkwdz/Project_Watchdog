@@ -134,7 +134,10 @@ function parseHost(hostNode) {
   const hostnames = toArray(hostNode?.hostnames?.hostname);
   const osMatches = toArray(hostNode?.os?.osmatch);
   const ports = toArray(hostNode?.ports?.port);
-  const hostScripts = parseScriptResults(toArray(hostNode?.hostscript?.script));
+  const hostScripts = parseScriptResults([
+    ...toArray(hostNode?.hostscript?.script),
+    ...toArray(hostNode?.script),
+  ]);
 
   const ipAddress = addresses.find((address) => address?.$?.addrtype === 'ipv4')?.$?.addr || null;
   const macAddress = addresses.find((address) => address?.$?.addrtype === 'mac')?.$?.addr || null;

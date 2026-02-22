@@ -4,6 +4,7 @@ const deviceHealthMigration = require('./migrations/003_device_health');
 const deviceDisplayNameMigration = require('./migrations/004_device_display_name');
 const scannerSettingsMigration = require('./migrations/005_scanner_settings');
 const dataReconciliationMigration = require('./migrations/006_data_reconciliation');
+const credentialsAndVulnEnrichmentMigration = require('./migrations/007_credentials_and_vuln_enrichment');
 
 const SCHEMA_STATEMENTS = [
   `
@@ -28,6 +29,22 @@ const SCHEMA_STATEMENTS = [
     );
   `,
   `
+    CREATE TABLE IF NOT EXISTS scan_credentials (
+      id SERIAL PRIMARY KEY,
+      credential_type VARCHAR(8) NOT NULL CHECK (credential_type IN ('ssh', 'smb')),
+      display_name TEXT,
+      username TEXT NOT NULL,
+      secret_ciphertext BYTEA NOT NULL,
+      secret_iv BYTEA NOT NULL,
+      secret_tag BYTEA NOT NULL,
+      external_credential_id TEXT,
+      source VARCHAR(16) NOT NULL DEFAULT 'greenbone',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ
+    );
+  `,
+  `
     CREATE TABLE IF NOT EXISTS scans (
       id SERIAL PRIMARY KEY,
       target TEXT NOT NULL,
@@ -38,7 +55,9 @@ const SCHEMA_STATEMENTS = [
       started_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
       initiated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      external_task_id TEXT
+      external_task_id TEXT,
+      ssh_credential_id INTEGER REFERENCES scan_credentials(id) ON DELETE SET NULL,
+      smb_credential_id INTEGER REFERENCES scan_credentials(id) ON DELETE SET NULL
     );
   `,
   `
@@ -64,6 +83,9 @@ const SCHEMA_STATEMENTS = [
       severity VARCHAR(32),
       cvss_score DOUBLE PRECISION,
       cvss_severity VARCHAR(32),
+      qod DOUBLE PRECISION,
+      cvss_vector TEXT,
+      solution TEXT,
       description TEXT,
       source VARCHAR(64)
     );
@@ -81,6 +103,7 @@ const SCHEMA_STATEMENTS = [
   ...deviceDisplayNameMigration,
   ...scannerSettingsMigration,
   ...dataReconciliationMigration,
+  ...credentialsAndVulnEnrichmentMigration,
 ];
 
 async function migrate() {

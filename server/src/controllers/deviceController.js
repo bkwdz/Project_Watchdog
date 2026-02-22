@@ -143,6 +143,13 @@ exports.list = async (req, res, next) => {
       online: Boolean(device.online_status),
       lastSeen: device.last_seen,
       displayName: device.display_name,
+      os: {
+        name: device.os_guess || null,
+        source: device.os_guess_source || null,
+        confidence: Number.isFinite(Number(device.os_guess_confidence))
+          ? Number(device.os_guess_confidence)
+          : null,
+      },
     }));
 
     return res.json(devices);
@@ -222,6 +229,9 @@ exports.get = async (req, res, next) => {
           severity,
           cvss_score,
           cvss_severity,
+          qod,
+          cvss_vector,
+          solution,
           port,
           description,
           source
@@ -285,6 +295,14 @@ exports.get = async (req, res, next) => {
       online: Boolean(device.online_status),
       lastSeen: device.last_seen,
       displayName: device.display_name,
+      os: {
+        name: device.os_guess || null,
+        source: device.os_guess_source || null,
+        confidence: Number.isFinite(Number(device.os_guess_confidence))
+          ? Number(device.os_guess_confidence)
+          : null,
+        detections: Array.isArray(device.os_detections) ? device.os_detections : [],
+      },
       ports: portsResult.rows,
       vulnerabilities: vulnerabilitiesResult.rows,
       tls_certificates: tlsCertificatesResult.rows,

@@ -4,10 +4,12 @@ import {
   createScan,
   createVulnerabilityScan,
   getDevices,
+  getVulnerabilityCredentials,
   getVulnerabilityScanConfigs,
   getVulnerabilityScannerStatus,
 } from '../api/endpoints';
 import Card from '../components/Card';
+import CredentialFields from '../components/CredentialFields';
 import HoverProfileSelect from '../components/HoverProfileSelect';
 import Modal from '../components/Modal';
 import ToastStack from '../components/ToastStack';
@@ -50,6 +52,15 @@ export default function Devices() {
   const [vulnConfigs, setVulnConfigs] = useState([]);
   const [vulnConfigId, setVulnConfigId] = useState('');
   const [vulnConfigsLoaded, setVulnConfigsLoaded] = useState(false);
+  const [useCredentials, setUseCredentials] = useState(false);
+  const [credentialMode, setCredentialMode] = useState('existing');
+  const [credentialType, setCredentialType] = useState('ssh');
+  const [credentialOptions, setCredentialOptions] = useState([]);
+  const [credentialsLoading, setCredentialsLoading] = useState(false);
+  const [credentialId, setCredentialId] = useState('');
+  const [credentialName, setCredentialName] = useState('');
+  const [credentialUsername, setCredentialUsername] = useState('');
+  const [credentialPassword, setCredentialPassword] = useState('');
 
   const loadDevices = useCallback(async () => {
     setError('');
@@ -117,6 +128,29 @@ export default function Devices() {
     }
   }, []);
 
+  const loadVulnerabilityCredentials = useCallback(async (type) => {
+    setCredentialsLoading(true);
+
+    try {
+      const data = await getVulnerabilityCredentials(type);
+      const entries = Array.isArray(data?.credentials) ? data.credentials : [];
+      setCredentialOptions(entries);
+      setCredentialId((current) => {
+        if (current && entries.some((entry) => String(entry.id) === String(current))) {
+          return current;
+        }
+
+        return entries[0]?.id ? String(entries[0].id) : '';
+      });
+    } catch (err) {
+      setCredentialOptions([]);
+      setCredentialId('');
+      pushToast(err?.response?.data?.error || 'Unable to load saved credentials.', 'error');
+    } finally {
+      setCredentialsLoading(false);
+    }
+  }, [pushToast]);
+
   useEffect(() => {
     if (!modalOpen || rangeScanner !== 'greenbone') {
       return;
@@ -139,6 +173,29 @@ export default function Devices() {
 
     void loadVulnerabilityConfigs();
   }, [loadVulnerabilityConfigs, modalOpen, rangeScanner, vulnEnabled, vulnStatusLoaded]);
+
+  useEffect(() => {
+    if (!modalOpen || rangeScanner !== 'greenbone' || !useCredentials || credentialMode !== 'existing') {
+      return;
+    }
+
+    void loadVulnerabilityCredentials(credentialType);
+  }, [
+    credentialMode,
+    credentialType,
+    loadVulnerabilityCredentials,
+    modalOpen,
+    rangeScanner,
+    useCredentials,
+  ]);
+
+  useEffect(() => {
+    if (rangeScanner === 'greenbone') {
+      return;
+    }
+
+    setUseCredentials(false);
+  }, [rangeScanner]);
 
   const orderedDevices = useMemo(
     () =>
@@ -172,9 +229,43 @@ export default function Devices() {
           throw new Error('No vulnerability scan profile is available.');
         }
 
+        let credentials = { mode: 'none' };
+
+        if (useCredentials) {
+          if (credentialMode === 'existing') {
+            const parsedCredentialId = Number(credentialId);
+
+            if (!Number.isInteger(parsedCredentialId) || parsedCredentialId < 1) {
+              throw new Error('Select a saved credential before starting the scan.');
+            }
+
+            credentials = {
+              mode: 'existing',
+              type: credentialType,
+              credential_id: parsedCredentialId,
+            };
+          } else {
+            const username = credentialUsername.trim();
+            const password = credentialPassword.trim();
+
+            if (!username || !password) {
+              throw new Error('Credential username and password are required.');
+            }
+
+            credentials = {
+              mode: 'new',
+              type: credentialType,
+              name: credentialName.trim(),
+              username,
+              password,
+            };
+          }
+        }
+
         scan = await createVulnerabilityScan(target, vulnConfigId, {
           tcpPorts: rangeTcpPorts,
           udpPorts: rangeUdpPorts,
+          credentials,
         });
 
         pushToast(`Vulnerability scan #${scan.id} queued for ${target}.`, 'success');
@@ -190,6 +281,15 @@ export default function Devices() {
       setRangeScanner('nmap');
       setRangeTcpPorts('1-1000');
       setRangeUdpPorts('');
+      setUseCredentials(false);
+      setCredentialMode('existing');
+      setCredentialType('ssh');
+      setCredentialOptions([]);
+      setCredentialsLoading(false);
+      setCredentialId('');
+      setCredentialName('');
+      setCredentialUsername('');
+      setCredentialPassword('');
     } catch (err) {
       pushToast(err?.response?.data?.error || err?.message || 'Unable to start range scan.', 'error');
     } finally {
@@ -319,6 +419,26 @@ export default function Devices() {
                 onChange={(event) => setRangeUdpPorts(event.target.value)}
               />
             </div>
+
+            <CredentialFields
+              useCredentials={useCredentials}
+              setUseCredentials={setUseCredentials}
+              credentialMode={credentialMode}
+              setCredentialMode={setCredentialMode}
+              credentialType={credentialType}
+              setCredentialType={setCredentialType}
+              credentialId={credentialId}
+              setCredentialId={setCredentialId}
+              credentialName={credentialName}
+              setCredentialName={setCredentialName}
+              credentialUsername={credentialUsername}
+              setCredentialUsername={setCredentialUsername}
+              credentialPassword={credentialPassword}
+              setCredentialPassword={setCredentialPassword}
+              credentialOptions={credentialOptions}
+              credentialsLoading={credentialsLoading}
+              disabled={submittingScan}
+            />
           </>
         )}
 

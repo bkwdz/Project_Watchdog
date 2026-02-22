@@ -299,6 +299,128 @@ function parseLabelValuePairs(value) {
   return pairs;
 }
 
+function parseNvtTags(value) {
+  const text = String(value || '').trim();
+
+  if (!text) {
+    return {};
+  }
+
+  const tags = {};
+
+  text
+    .split('|')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .forEach((entry) => {
+      const separator = entry.indexOf('=');
+
+      if (separator <= 0) {
+        return;
+      }
+
+      const key = entry.slice(0, separator).trim().toLowerCase();
+      const parsedValue = entry.slice(separator + 1).trim();
+
+      if (!key || !parsedValue || Object.prototype.hasOwnProperty.call(tags, key)) {
+        return;
+      }
+
+      tags[key] = parsedValue;
+    });
+
+  return tags;
+}
+
+function parseQodValue(...values) {
+  for (const value of values) {
+    const raw = String(value || '').trim();
+
+    if (!raw) {
+      continue;
+    }
+
+    const numeric = Number.parseFloat(raw);
+
+    if (Number.isFinite(numeric)) {
+      if (numeric > 1 && numeric <= 100) {
+        return numeric / 100;
+      }
+
+      if (numeric >= 0 && numeric <= 1) {
+        return numeric;
+      }
+    }
+  }
+
+  return null;
+}
+
+function parsePortMentionsFromText(value) {
+  const text = String(value || '');
+  const matches = [];
+  const seen = new Set();
+
+  const explicitRegex = /(\d{1,5})\s*\/\s*(tcp|udp)\b/gi;
+  let explicitMatch = explicitRegex.exec(text);
+
+  while (explicitMatch) {
+    const port = Number(explicitMatch[1]);
+    const protocol = explicitMatch[2].toLowerCase();
+
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) {
+      const key = `${port}/${protocol}`;
+
+      if (!seen.has(key)) {
+        seen.add(key);
+        matches.push({
+          port,
+          protocol,
+        });
+      }
+    }
+
+    explicitMatch = explicitRegex.exec(text);
+  }
+
+  return matches;
+}
+
+function extractBannerCandidates(...values) {
+  const candidates = [];
+  const seen = new Set();
+
+  values
+    .map((value) => String(value || ''))
+    .forEach((text) => {
+      text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .forEach((line) => {
+          const match = line.match(
+            /(?:service banner|banner|server|product|service)\s*(?:is|:)\s*(.{4,400})$/i,
+          );
+          const parsed = normalizeText(match?.[1] || null);
+
+          if (!parsed || parsed.length < 4 || parsed.length > 400) {
+            return;
+          }
+
+          const key = parsed.toLowerCase();
+
+          if (seen.has(key)) {
+            return;
+          }
+
+          seen.add(key);
+          candidates.push(parsed);
+        });
+    });
+
+  return candidates.slice(0, 8);
+}
+
 function looksLikeTlsContext(...values) {
   const text = values
     .map((value) => String(value || '').toLowerCase())
@@ -803,6 +925,71 @@ async function resolveScannerId(socket, requestedId) {
   return entries[0].id;
 }
 
+async function fetchCredentialTypeEntries(socket) {
+  const response = await sendGmpCommand(
+    socket,
+    '<get_credential_types details="1" ignore_pagination="1" />',
+  );
+
+  const credentialTypes = collectNodesByKey(response.rootNode, 'credential_type', []);
+
+  return credentialTypes
+    .map((credentialTypeNode) => ({
+      id: credentialTypeNode?.$?.id || null,
+      name: extractText(credentialTypeNode?.name),
+    }))
+    .filter((entry) => entry.id);
+}
+
+function normalizeCredentialKind(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'ssh' || normalized === 'smb' ? normalized : null;
+}
+
+function selectCredentialTypeId(entries, credentialType) {
+  const kind = normalizeCredentialKind(credentialType);
+
+  if (!kind) {
+    return null;
+  }
+
+  const preferredTokens = kind === 'ssh'
+    ? ['ssh']
+    : ['smb', 'cifs', 'windows'];
+
+  for (const token of preferredTokens) {
+    const found = entries.find((entry) => normalizeName(entry.name).includes(token));
+
+    if (found) {
+      return found.id;
+    }
+  }
+
+  return null;
+}
+
+async function getCredentialTypes() {
+  return withAuthenticatedSession(async (socket) => fetchCredentialTypeEntries(socket));
+}
+
+async function resolveCredentialTypeId(socket, credentialType) {
+  const entries = await fetchCredentialTypeEntries(socket);
+  const resolvedTypeId = selectCredentialTypeId(entries, credentialType);
+
+  if (resolvedTypeId) {
+    return resolvedTypeId;
+  }
+
+  throw new GreenboneServiceError(`Credential type '${credentialType}' is unavailable in the vulnerability manager`, {
+    statusCode: 400,
+    code: 'GREENBONE_CREDENTIAL_TYPE_NOT_FOUND',
+    details: {
+      requested: credentialType,
+      available: entries.map((entry) => entry.name),
+    },
+  });
+}
+
 function mapTaskStatus(statusText) {
   const normalized = String(statusText || '').toLowerCase();
 
@@ -1170,7 +1357,17 @@ function parseReportData(rootNode) {
     }
 
     const existing = hostMetadata.get(host) || {};
-    hostMetadata.set(host, mergeJsonValues(existing, metadataPatch));
+    const merged = mergeJsonValues(existing, metadataPatch);
+
+    if (Array.isArray(merged.greenbone_logs) && merged.greenbone_logs.length > 40) {
+      merged.greenbone_logs = merged.greenbone_logs.slice(-40);
+    }
+
+    if (Array.isArray(merged.service_banners) && merged.service_banners.length > 20) {
+      merged.service_banners = merged.service_banners.slice(-20);
+    }
+
+    hostMetadata.set(host, merged);
   };
 
   const upsertPortObservation = ({
@@ -1213,6 +1410,14 @@ function parseReportData(rootNode) {
 
     if (Array.isArray(current.metadata.ssh_host_keys) && current.metadata.ssh_host_keys.length > 20) {
       current.metadata.ssh_host_keys = current.metadata.ssh_host_keys.slice(-20);
+    }
+
+    if (Array.isArray(current.metadata.greenbone_logs) && current.metadata.greenbone_logs.length > 40) {
+      current.metadata.greenbone_logs = current.metadata.greenbone_logs.slice(-40);
+    }
+
+    if (Array.isArray(current.metadata.service_banners) && current.metadata.service_banners.length > 20) {
+      current.metadata.service_banners = current.metadata.service_banners.slice(-20);
     }
 
     portObservations.set(key, current);
@@ -1334,18 +1539,39 @@ function parseReportData(rootNode) {
     const hostText = extractText(result.host);
     const host = extractIpv4Candidate(hostText) || normalizeText(hostText);
     const portDescriptor = parsePortDescriptor(extractText(result.port));
+    const nvtTags = parseNvtTags(extractText(result.nvt?.tags));
     const cvssScore = parseCvssScore(
       extractText(result.severity),
       extractText(result.nvt?.cvss_base),
       extractText(result.cvss_base),
+      nvtTags.cvss_base,
     );
     const threatText = extractText(result.threat)
       || extractText(result.cvss_severity)
-      || extractText(result.nvt?.threat);
+      || extractText(result.nvt?.threat)
+      || nvtTags.threat
+      || nvtTags.severity;
     const explicitSeverity = normalizeSeverityLabel(threatText);
     const cvssSeverity = explicitSeverity || severityFromScore(cvssScore);
     const name = extractText(result.name) || extractText(result.nvt?.name) || 'Unnamed vulnerability';
     const description = extractText(result.description) || extractText(result.nvt?.summary) || '';
+    const qod = parseQodValue(
+      extractText(result.qod?.value),
+      extractText(result.qod),
+      nvtTags.qod,
+      nvtTags.qod_type,
+    );
+    const cvssVector = normalizeText(
+      extractText(result.nvt?.cvss_base_vector)
+      || extractText(result.cvss_base_vector)
+      || nvtTags.cvss_base_vector
+      || nvtTags.cvss_vector,
+    );
+    const solution = normalizeText(
+      extractText(result.solution)
+      || extractText(result.nvt?.solution)
+      || nvtTags.solution,
+    );
     const nvtOid = normalizeText(result?.nvt?.$?.oid) || null;
     const cveList = parseCveList(
       [extractText(result.nvt?.cve), extractText(result.cve)]
@@ -1353,6 +1579,39 @@ function parseReportData(rootNode) {
         .join(','),
     );
     const informational = isInformationalFinding(threatText, cvssScore);
+    const bannerCandidates = extractBannerCandidates(
+      name,
+      description,
+      nvtTags.summary,
+      nvtTags.insight,
+      nvtTags.impact,
+      nvtTags.solution,
+    );
+    const mentionedPorts = parsePortMentionsFromText(
+      [
+        extractText(result.port),
+        name,
+        description,
+        nvtTags.summary,
+        nvtTags.solution,
+      ].join('\n'),
+    );
+
+    if (host) {
+      upsertHostMetadata(host, {
+        greenbone_logs: [
+          {
+            name,
+            informational,
+            threat: normalizeText(threatText),
+            qod,
+            port: portDescriptor.port,
+            description: summarizeText(description, 320),
+          },
+        ],
+        ...(bannerCandidates.length > 0 ? { service_banners: bannerCandidates } : {}),
+      });
+    }
 
     if (host && portDescriptor.port) {
       upsertPortObservation({
@@ -1366,12 +1625,59 @@ function parseReportData(rootNode) {
               name,
               threat: normalizeText(threatText),
               cvss_score: Number.isFinite(cvssScore) ? cvssScore : null,
+              qod,
+              cvss_vector: cvssVector,
+              solution: solution ? summarizeText(solution, 320) : null,
               cves: cveList,
               description: summarizeText(description, 320),
             },
           ],
+          ...(bannerCandidates.length > 0 ? { service_banners: bannerCandidates } : {}),
         },
       });
+    }
+
+    if (host && informational) {
+      const informationalPorts = [];
+
+      if (portDescriptor.port) {
+        informationalPorts.push({
+          port: portDescriptor.port,
+          protocol: portDescriptor.protocol || 'tcp',
+          service: portDescriptor.service || null,
+        });
+      }
+
+      mentionedPorts.forEach((entry) => {
+        informationalPorts.push({
+          port: entry.port,
+          protocol: entry.protocol || 'tcp',
+          service: portDescriptor.service || null,
+        });
+      });
+
+      informationalPorts
+        .filter((entry) => Number.isInteger(entry.port))
+        .forEach((entry) => {
+          upsertPortObservation({
+            host,
+            port: entry.port,
+            protocol: entry.protocol,
+            service: entry.service,
+            metadata: {
+              greenbone_logs: [
+                {
+                  name,
+                  threat: normalizeText(threatText),
+                  qod,
+                  cvss_score: Number.isFinite(cvssScore) ? cvssScore : null,
+                  description: summarizeText(description, 260),
+                },
+              ],
+              ...(bannerCandidates.length > 0 ? { service_banners: bannerCandidates } : {}),
+            },
+          });
+        });
     }
 
     const osCandidate = extractOsCandidate(
@@ -1471,6 +1777,9 @@ function parseReportData(rootNode) {
         severity: cvssSeverity,
         cvss_score: cvssScore,
         cvss_severity: cvssSeverity,
+        qod,
+        cvss_vector: cvssVector,
+        solution,
         description,
         source: 'greenbone',
       });
@@ -1506,6 +1815,15 @@ function parseReportData(rootNode) {
         },
       });
 
+      const detailBanners = extractBannerCandidates(detailName, detailValue);
+      const detailPorts = parsePortMentionsFromText(`${detailName}\n${detailValue}`);
+
+      if (detailBanners.length > 0) {
+        upsertHostMetadata(host, {
+          service_banners: detailBanners,
+        });
+      }
+
       const osCandidate = extractOsCandidate(detailName, detailValue);
 
       if (osCandidate) {
@@ -1521,6 +1839,25 @@ function parseReportData(rootNode) {
       }
 
       const derivedPort = parsePortDescriptor(`${detailName} ${detailValue}`);
+
+      detailPorts.forEach((entry) => {
+        upsertPortObservation({
+          host,
+          port: entry.port,
+          protocol: entry.protocol,
+          service: derivedPort.service,
+          metadata: {
+            greenbone_logs: [
+              {
+                source: detailSource || null,
+                name: detailName || null,
+                description: summarizeText(detailValue, 260),
+              },
+            ],
+            ...(detailBanners.length > 0 ? { service_banners: detailBanners } : {}),
+          },
+        });
+      });
 
       if (looksLikeTlsContext(detailName, detailValue)) {
         const cert = parseCertificateFromText(`${detailName}\n${detailValue}`);
@@ -1612,6 +1949,8 @@ async function startScan(target, options = {}) {
   const safeTarget = String(target || '').trim();
   const requestedScanConfigId = String(options.scanConfigId || '').trim() || null;
   const requestedPortRange = String(options.portRange || '').trim() || null;
+  const requestedSshCredentialId = String(options.sshCredentialId || '').trim() || null;
+  const requestedSmbCredentialId = String(options.smbCredentialId || '').trim() || null;
   const requestedMaxChecks = parseTaskConcurrencyValue(options.maxChecks);
   const requestedMaxHosts = parseTaskConcurrencyValue(options.maxHosts);
 
@@ -1630,6 +1969,12 @@ async function startScan(target, options = {}) {
     const resolvedMaxChecks = requestedMaxChecks ?? parseTaskConcurrencyValue(config.maxChecks);
     const resolvedMaxHosts = requestedMaxHosts ?? parseTaskConcurrencyValue(config.maxHosts);
     const taskPreferencesXml = buildTaskPreferencesXml(resolvedMaxChecks, resolvedMaxHosts);
+    const credentialXml = [
+      requestedSshCredentialId ? `<ssh_credential id="${xmlEscape(requestedSshCredentialId)}" />` : '',
+      requestedSmbCredentialId ? `<smb_credential id="${xmlEscape(requestedSmbCredentialId)}" />` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     if (!isValidGreenbonePortRange(resolvedPortRange)) {
       throw new GreenboneServiceError('Invalid Greenbone port range format', {
@@ -1639,16 +1984,43 @@ async function startScan(target, options = {}) {
       });
     }
 
-    const createTargetResponse = await sendGmpCommand(
-      socket,
-      `
-        <create_target>
-          <name>Watchdog-${xmlEscape(safeTarget)}-${suffix}</name>
-          <hosts>${xmlEscape(safeTarget)}</hosts>
-          <port_range>${xmlEscape(resolvedPortRange)}</port_range>
-        </create_target>
-      `,
-    );
+    let createTargetResponse;
+
+    try {
+      createTargetResponse = await sendGmpCommand(
+        socket,
+        `
+          <create_target>
+            <name>Watchdog-${xmlEscape(safeTarget)}-${suffix}</name>
+            <hosts>${xmlEscape(safeTarget)}</hosts>
+            <port_range>${xmlEscape(resolvedPortRange)}</port_range>
+            ${credentialXml}
+          </create_target>
+        `,
+      );
+    } catch (error) {
+      const statusText = String(error?.details?.status_text || '').toLowerCase();
+      const referencesCredential = /credential|unknown id|not found|invalid/i.test(statusText);
+
+      if (
+        (requestedSshCredentialId || requestedSmbCredentialId)
+        && error instanceof GreenboneServiceError
+        && error.code === 'GREENBONE_GMP_ERROR'
+        && referencesCredential
+      ) {
+        throw new GreenboneServiceError('Vulnerability credential was rejected by the scanner', {
+          statusCode: 400,
+          code: 'GREENBONE_CREDENTIAL_REJECTED',
+          details: {
+            status_text: error?.details?.status_text || null,
+            ssh_credential_id: requestedSshCredentialId,
+            smb_credential_id: requestedSmbCredentialId,
+          },
+        });
+      }
+
+      throw error;
+    }
 
     const targetId = extractResponseId(createTargetResponse);
 
@@ -1782,11 +2154,68 @@ async function fetchAndParseReport(taskId, reportId) {
   });
 }
 
+async function createCredential({
+  credentialType,
+  name,
+  username,
+  password,
+}) {
+  ensureEnabled();
+
+  const safeName = String(name || '').trim() || `Watchdog ${credentialType} credential ${Date.now()}`;
+  const safeUsername = String(username || '').trim();
+  const safePassword = String(password || '');
+  const normalizedType = normalizeCredentialKind(credentialType);
+
+  if (!normalizedType) {
+    throw new GreenboneServiceError('Credential type must be ssh or smb', {
+      statusCode: 400,
+      code: 'GREENBONE_INVALID_CREDENTIAL_TYPE',
+    });
+  }
+
+  if (!safeUsername || !safePassword) {
+    throw new GreenboneServiceError('Credential username and password are required', {
+      statusCode: 400,
+      code: 'GREENBONE_CREDENTIAL_FIELDS_REQUIRED',
+    });
+  }
+
+  return withAuthenticatedSession(async (socket) => {
+    const credentialTypeId = await resolveCredentialTypeId(socket, normalizedType);
+    const createCredentialResponse = await sendGmpCommand(
+      socket,
+      `
+        <create_credential>
+          <name>${xmlEscape(safeName)}</name>
+          <credential_type id="${xmlEscape(credentialTypeId)}" />
+          <login>${xmlEscape(safeUsername)}</login>
+          <password>${xmlEscape(safePassword)}</password>
+        </create_credential>
+      `,
+    );
+    const credentialId = extractResponseId(createCredentialResponse);
+
+    if (!credentialId) {
+      throw new GreenboneServiceError('Unable to create vulnerability credential', {
+        code: 'GREENBONE_CREDENTIAL_CREATE_FAILED',
+      });
+    }
+
+    return {
+      credentialId,
+      credentialType: normalizedType,
+    };
+  });
+}
+
 module.exports = {
   GreenboneServiceError,
   isGreenboneEnabled,
   getConfig,
   listScanConfigs,
+  getCredentialTypes,
+  createCredential,
   startScan,
   getTaskStatus,
   fetchAndParseReport,

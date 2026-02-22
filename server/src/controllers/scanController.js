@@ -6,6 +6,7 @@ const {
   getConfig: getGreenboneConfig,
   isGreenboneEnabled,
   listScanConfigs: listGreenboneScanConfigs,
+  createCredential: createGreenboneCredential,
   startScan: startGreenboneScan,
   getTaskStatus,
   fetchAndParseReport,
@@ -15,6 +16,15 @@ const {
   upsertPortRecord,
   buildAssetHash,
 } = require('../services/dataReconciliation');
+const {
+  normalizeCredentialType,
+  createCredentialRecord,
+  listCredentialSummaries,
+  resolveCredentialWithSecret,
+  markCredentialUsed,
+  updateCredentialExternalId,
+  sanitizeCredentialRow,
+} = require('../services/scanCredentialService');
 const { isValidCidr, isValidTarget, isValidIPv4 } = require('../utils/targetValidation');
 
 const GREENBONE_DISABLED_MESSAGE = 'Vulnerability scanner not enabled';
@@ -32,7 +42,9 @@ const SCAN_COLUMNS = `
   started_at,
   completed_at,
   initiated_by,
-  external_task_id
+  external_task_id,
+  ssh_credential_id,
+  smb_credential_id
 `;
 
 function normalizeTarget(target) {
@@ -170,6 +182,80 @@ function buildGreenbonePortRange(tcpPortsRaw, udpPortsRaw) {
   return sections.join(',');
 }
 
+function parseCredentialMode(value) {
+  const normalized = String(value || 'none').trim().toLowerCase();
+  return ['none', 'existing', 'new'].includes(normalized) ? normalized : null;
+}
+
+function parseVulnerabilityCredentialRequest(value) {
+  if (!value || typeof value !== 'object') {
+    return {
+      mode: 'none',
+      type: null,
+      credential_id: null,
+      name: null,
+      username: null,
+      password: null,
+    };
+  }
+
+  const mode = parseCredentialMode(value.mode);
+
+  if (!mode) {
+    throw new Error('credentials.mode must be one of: none, existing, new');
+  }
+
+  if (mode === 'none') {
+    return {
+      mode,
+      type: null,
+      credential_id: null,
+      name: null,
+      username: null,
+      password: null,
+    };
+  }
+
+  const type = normalizeCredentialType(value.type);
+
+  if (!type) {
+    throw new Error('credentials.type must be ssh or smb');
+  }
+
+  if (mode === 'existing') {
+    const credentialId = Number(value.credential_id);
+
+    if (!Number.isInteger(credentialId) || credentialId < 1) {
+      throw new Error('credentials.credential_id must be a positive integer');
+    }
+
+    return {
+      mode,
+      type,
+      credential_id: credentialId,
+      name: null,
+      username: null,
+      password: null,
+    };
+  }
+
+  const username = normalizeOptionalText(value.username);
+  const password = normalizeOptionalText(value.password);
+
+  if (!username || !password) {
+    throw new Error('credentials.username and credentials.password are required');
+  }
+
+  return {
+    mode,
+    type,
+    credential_id: null,
+    name: normalizeOptionalText(value.name),
+    username,
+    password,
+  };
+}
+
 function normalizeScanType(scanType) {
   if (typeof scanType !== 'string') {
     return 'standard';
@@ -200,6 +286,141 @@ function toControllerError(error, fallbackMessage) {
       error: fallbackMessage,
     },
   };
+}
+
+function buildCredentialDisplayName({ mode, type, target, username, explicitName }) {
+  const provided = normalizeOptionalText(explicitName);
+
+  if (provided) {
+    return provided;
+  }
+
+  const safeTarget = normalizeOptionalText(target) || 'target';
+  const safeUser = normalizeOptionalText(username) || 'user';
+  const suffix = mode === 'new' ? 'new' : 'reuse';
+
+  return `Watchdog ${type.toUpperCase()} ${safeUser}@${safeTarget} (${suffix})`;
+}
+
+async function ensureCredentialExternalId(binding, { target }) {
+  if (!binding) {
+    return null;
+  }
+
+  if (binding.external_credential_id) {
+    return binding.external_credential_id;
+  }
+
+  const displayName = buildCredentialDisplayName({
+    mode: binding.mode,
+    type: binding.type,
+    target,
+    username: binding.username,
+    explicitName: binding.display_name,
+  });
+  const created = await createGreenboneCredential({
+    credentialType: binding.type,
+    name: displayName,
+    username: binding.username,
+    password: binding.password,
+  });
+
+  binding.external_credential_id = created.credentialId;
+
+  if (binding.row?.id) {
+    await updateCredentialExternalId(binding.row.id, created.credentialId);
+  }
+
+  return created.credentialId;
+}
+
+async function resolveVulnerabilityCredentialBinding(credentialRequest, { userId, target }) {
+  if (!credentialRequest || credentialRequest.mode === 'none') {
+    return null;
+  }
+
+  if (credentialRequest.mode === 'existing') {
+    const existing = await resolveCredentialWithSecret(
+      credentialRequest.credential_id,
+      credentialRequest.type,
+    );
+    const binding = {
+      mode: 'existing',
+      type: credentialRequest.type,
+      row: existing.row,
+      display_name: existing.row.display_name,
+      username: existing.username,
+      password: existing.password,
+      external_credential_id: existing.external_credential_id,
+    };
+
+    await ensureCredentialExternalId(binding, { target });
+    return binding;
+  }
+
+  const createdExternal = await createGreenboneCredential({
+    credentialType: credentialRequest.type,
+    name: buildCredentialDisplayName({
+      mode: 'new',
+      type: credentialRequest.type,
+      target,
+      username: credentialRequest.username,
+      explicitName: credentialRequest.name,
+    }),
+    username: credentialRequest.username,
+    password: credentialRequest.password,
+  });
+
+  const localRecord = await createCredentialRecord({
+    credentialType: credentialRequest.type,
+    displayName: credentialRequest.name || null,
+    username: credentialRequest.username,
+    password: credentialRequest.password,
+    source: 'greenbone',
+    createdBy: userId,
+    externalCredentialId: createdExternal.credentialId,
+  });
+
+  return {
+    mode: 'new',
+    type: credentialRequest.type,
+    row: localRecord,
+    display_name: localRecord.display_name,
+    username: localRecord.username,
+    password: credentialRequest.password,
+    external_credential_id: createdExternal.credentialId,
+  };
+}
+
+async function retryCredentialIfRejected(error, binding, target) {
+  if (
+    !binding
+    || !(error instanceof GreenboneServiceError)
+    || error.code !== 'GREENBONE_CREDENTIAL_REJECTED'
+  ) {
+    throw error;
+  }
+
+  const recreated = await createGreenboneCredential({
+    credentialType: binding.type,
+    name: buildCredentialDisplayName({
+      mode: binding.mode,
+      type: binding.type,
+      target,
+      username: binding.username,
+      explicitName: binding.display_name,
+    }),
+    username: binding.username,
+    password: binding.password,
+  });
+
+  binding.external_credential_id = recreated.credentialId;
+
+  if (binding.row?.id) {
+    await updateCredentialExternalId(binding.row.id, recreated.credentialId);
+  }
+
+  return binding;
 }
 
 async function findScanById(scanId) {
@@ -580,6 +801,9 @@ async function storeGreenboneReportData(scan, reportData) {
                 cve_list: cveList,
                 nvt_oid: vulnerability.nvt_oid || null,
                 severity: vulnerability.cvss_severity || vulnerability.severity || null,
+                qod: Number.isFinite(vulnerability.qod) ? vulnerability.qod : null,
+                cvss_vector: vulnerability.cvss_vector || null,
+                solution: vulnerability.solution || null,
               },
             ],
           },
@@ -600,11 +824,14 @@ async function storeGreenboneReportData(scan, reportData) {
             severity,
             cvss_score,
             cvss_severity,
+            qod,
+            cvss_vector,
+            solution,
             port,
             description,
             source
           )
-          VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, $10, $11, $12)
+          VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         `,
         [
           deviceId,
@@ -616,6 +843,9 @@ async function storeGreenboneReportData(scan, reportData) {
           vulnerability.severity || null,
           Number.isFinite(vulnerability.cvss_score) ? vulnerability.cvss_score : null,
           vulnerability.cvss_severity || null,
+          Number.isFinite(vulnerability.qod) ? vulnerability.qod : null,
+          vulnerability.cvss_vector || null,
+          vulnerability.solution || null,
           Number.isInteger(vulnerability.port) ? vulnerability.port : null,
           vulnerability.description || null,
           vulnerability.source || 'greenbone',
@@ -643,6 +873,9 @@ async function getScanVulnerabilities(scanId) {
         severity,
         cvss_score,
         cvss_severity,
+        qod,
+        cvss_vector,
+        solution,
         port,
         description,
         source
@@ -911,10 +1144,12 @@ exports.createVulnerabilityScan = async (req, res, next) => {
 
     const target = normalizeTarget(req.body.target);
     const scanConfigId = normalizeOptionalText(req.body.scan_config_id);
+    let credentialRequest;
     let portRange = null;
 
     try {
       portRange = buildGreenbonePortRange(req.body.tcp_ports, req.body.udp_ports);
+      credentialRequest = parseVulnerabilityCredentialRequest(req.body.credentials);
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
@@ -924,25 +1159,87 @@ exports.createVulnerabilityScan = async (req, res, next) => {
     }
 
     const runtimeSettings = await getStoredVulnerabilitySettings();
+    let credentialBinding;
+
+    try {
+      credentialBinding = await resolveVulnerabilityCredentialBinding(credentialRequest, {
+        userId: req.user?.id || null,
+        target,
+      });
+    } catch (error) {
+      if (error instanceof GreenboneServiceError) {
+        const mappedError = toControllerError(error, 'Unable to prepare vulnerability credentials');
+        return res.status(mappedError.statusCode).json(mappedError.payload);
+      }
+
+      return res.status(400).json({ error: error.message || 'Invalid credentials payload' });
+    }
+
+    const scanCredentialIds = {
+      ssh_credential_id: credentialBinding?.type === 'ssh' ? credentialBinding.row?.id || null : null,
+      smb_credential_id: credentialBinding?.type === 'smb' ? credentialBinding.row?.id || null : null,
+    };
 
     const queuedResult = await query(
       `
-        INSERT INTO scans (target, scan_type, scanner_type, status, progress_percent, initiated_by)
-        VALUES ($1, 'vulnerability', 'greenbone', 'queued', 0, $2)
+        INSERT INTO scans (
+          target,
+          scan_type,
+          scanner_type,
+          status,
+          progress_percent,
+          initiated_by,
+          ssh_credential_id,
+          smb_credential_id
+        )
+        VALUES ($1, 'vulnerability', 'greenbone', 'queued', 0, $2, $3, $4)
         RETURNING ${SCAN_COLUMNS}
       `,
-      [target, req.user?.id || null],
+      [
+        target,
+        req.user?.id || null,
+        scanCredentialIds.ssh_credential_id,
+        scanCredentialIds.smb_credential_id,
+      ],
     );
 
     const queuedScan = queuedResult.rows[0];
 
     try {
-      const job = await startGreenboneScan(target, {
+      const startScanPayload = {
         scanConfigId: scanConfigId || undefined,
         portRange: portRange || undefined,
         maxChecks: runtimeSettings.greenbone_max_checks,
         maxHosts: runtimeSettings.greenbone_max_hosts,
-      });
+        sshCredentialId: credentialBinding?.type === 'ssh'
+          ? credentialBinding.external_credential_id || undefined
+          : undefined,
+        smbCredentialId: credentialBinding?.type === 'smb'
+          ? credentialBinding.external_credential_id || undefined
+          : undefined,
+      };
+
+      let job;
+
+      try {
+        job = await startGreenboneScan(target, startScanPayload);
+      } catch (error) {
+        const retriedBinding = await retryCredentialIfRejected(error, credentialBinding, target);
+
+        if (!retriedBinding) {
+          throw error;
+        }
+
+        job = await startGreenboneScan(target, {
+          ...startScanPayload,
+          sshCredentialId: retriedBinding.type === 'ssh'
+            ? retriedBinding.external_credential_id || undefined
+            : undefined,
+          smbCredentialId: retriedBinding.type === 'smb'
+            ? retriedBinding.external_credential_id || undefined
+            : undefined,
+        });
+      }
 
       const runningScan = await updateScan(queuedScan.id, {
         status: 'running',
@@ -950,6 +1247,10 @@ exports.createVulnerabilityScan = async (req, res, next) => {
         progress_percent: 10,
         external_task_id: job.externalTaskId,
       });
+
+      if (credentialBinding?.row?.id) {
+        await markCredentialUsed(credentialBinding.row.id);
+      }
 
       return res.status(202).json(runningScan);
     } catch (error) {
@@ -961,6 +1262,24 @@ exports.createVulnerabilityScan = async (req, res, next) => {
       const mappedError = toControllerError(error, 'Unable to start vulnerability scan');
       return res.status(mappedError.statusCode).json(mappedError.payload);
     }
+  } catch (err) {
+    return next(err);
+  }
+};
+
+exports.getVulnerabilityCredentials = async (req, res, next) => {
+  try {
+    const type = normalizeCredentialType(req.query.type);
+
+    if (!type) {
+      return res.status(400).json({ error: 'type must be ssh or smb' });
+    }
+
+    const credentials = await listCredentialSummaries(type);
+    return res.json({
+      type,
+      credentials: credentials.map(sanitizeCredentialRow),
+    });
   } catch (err) {
     return next(err);
   }

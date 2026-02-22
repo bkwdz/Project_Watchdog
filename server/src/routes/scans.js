@@ -8,6 +8,7 @@ router.use(requireAuth);
 router.get('/', controller.listScans);
 router.get('/vuln/status', controller.getVulnerabilityStatus);
 router.get('/vuln/configs', controller.getVulnerabilityScanConfigs);
+router.get('/vuln/credentials', controller.getVulnerabilityCredentials);
 router.get('/vuln/settings', controller.getVulnerabilitySettings);
 router.put('/vuln/settings', controller.updateVulnerabilitySettings);
 router.post('/vuln', controller.createVulnerabilityScan);
