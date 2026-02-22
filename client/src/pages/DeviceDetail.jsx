@@ -295,6 +295,7 @@ export default function DeviceDetail() {
   const [historyScanId, setHistoryScanId] = useState('');
   const [historyRefreshMode, setHistoryRefreshMode] = useState('selected');
   const [lastRefreshDetails, setLastRefreshDetails] = useState(null);
+  const [refreshOptionsOpen, setRefreshOptionsOpen] = useState(false);
   const [useCredentials, setUseCredentials] = useState(false);
   const [credentialMode, setCredentialMode] = useState('existing');
   const [credentialType, setCredentialType] = useState('ssh');
@@ -601,6 +602,7 @@ export default function DeviceDetail() {
         completed_at: result?.completed_at || null,
         reports_imported: Array.isArray(result?.reports_imported) ? result.reports_imported : [],
       });
+      setRefreshOptionsOpen(false);
       await loadDevice();
       await loadScans();
       pushToast(
@@ -650,6 +652,17 @@ export default function DeviceDetail() {
       return String(completedGreenboneScans[0].id);
     });
   }, [completedGreenboneScans]);
+
+  const canRefreshFromHistory = (
+    vulnEnabled
+    && vulnStatusLoaded
+    && !historyRefreshing
+    && !vulnTriggering
+    && !loading
+    && Boolean(device)
+    && completedGreenboneScans.length > 0
+    && (historyRefreshMode === 'all' || Boolean(historyScanId))
+  );
 
   const deviceMetadata = useMemo(() => toObject(device?.metadata), [device]);
   const portRows = useMemo(() => (Array.isArray(device?.ports) ? device.ports : []), [device]);
@@ -1342,19 +1355,115 @@ export default function DeviceDetail() {
 
         {!loading && !error && device && (
           <>
-            <div className="device-tab-list" role="tablist" aria-label="Device detail tabs">
-              {DEVICE_TABS.map((tab) => (
+            <div className="device-console-topbar">
+              <div className="device-tab-list" role="tablist" aria-label="Device detail tabs">
+                {DEVICE_TABS.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === tab.key}
+                    className={`device-tab-button ${activeTab === tab.key ? 'active' : ''}`}
+                    onClick={() => setActiveTab(tab.key)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="device-refresh-shell">
                 <button
-                  key={tab.key}
                   type="button"
-                  role="tab"
-                  aria-selected={activeTab === tab.key}
-                  className={`device-tab-button ${activeTab === tab.key ? 'active' : ''}`}
-                  onClick={() => setActiveTab(tab.key)}
+                  className="small-button device-refresh-trigger"
+                  onClick={() => setRefreshOptionsOpen((current) => !current)}
                 >
-                  {tab.label}
+                  {refreshOptionsOpen ? 'Close Refresh' : 'Refresh'}
                 </button>
-              ))}
+
+                {refreshOptionsOpen && (
+                  <div className="device-refresh-popover">
+                    <p className="actions-group-title">Refresh Device Data</p>
+                    <p className="muted vuln-status-inline">
+                      Pulls saved results from Greenbone history for this device.
+                    </p>
+
+                    <div className="field-stack vuln-port-field">
+                      <label htmlFor="history-refresh-mode">Refresh Mode</label>
+                      <select
+                        id="history-refresh-mode"
+                        value={historyRefreshMode}
+                        disabled={historyRefreshing || vulnTriggering || loading || !device}
+                        onChange={(event) => setHistoryRefreshMode(event.target.value)}
+                      >
+                        <option value="selected">Single Scan (Replace)</option>
+                        <option value="all">All Scans (Deduped)</option>
+                      </select>
+                    </div>
+
+                    {completedGreenboneScans.length > 0 && historyRefreshMode === 'selected' && (
+                      <div className="field-stack vuln-port-field">
+                        <label htmlFor="history-scan-id">Refresh Scan</label>
+                        <select
+                          id="history-scan-id"
+                          value={historyScanId}
+                          disabled={historyRefreshing || vulnTriggering || loading || !device}
+                          onChange={(event) => setHistoryScanId(event.target.value)}
+                        >
+                          {completedGreenboneScans.map((scan) => (
+                            <option key={scan.id} value={scan.id}>
+                              #{scan.id} - {formatDateTime(scan.completed_at || scan.started_at)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      className="small-button"
+                      disabled={!canRefreshFromHistory}
+                      onClick={refreshFromGreenboneHistory}
+                    >
+                      {historyRefreshing
+                        ? 'Refreshing...'
+                        : (historyRefreshMode === 'all'
+                          ? 'Refresh From All Greenbone Scans'
+                          : 'Refresh From Selected Greenbone Scan')}
+                    </button>
+
+                    {completedGreenboneScans.length === 0 && (
+                      <p className="muted vuln-status-inline">
+                        No completed Greenbone scans found for this device yet.
+                      </p>
+                    )}
+
+                    {lastRefreshDetails && (
+                      <div className="field-stack vuln-port-field">
+                        <label>Last Refresh Context</label>
+                        <p className="muted vuln-status-inline">
+                          Mode: {lastRefreshDetails.mode === 'all' ? 'All Scans (Deduped)' : 'Single Scan (Replace)'}
+                        </p>
+                        <p className="muted vuln-status-inline">
+                          Scan #{lastRefreshDetails.scan_id || '-'} | Report: {lastRefreshDetails.report_id || '-'}
+                        </p>
+                        <p className="muted vuln-status-inline">
+                          Task: {lastRefreshDetails.external_task_id || '-'}
+                        </p>
+                        <p className="muted vuln-status-inline">
+                          Completed: {formatDateTime(lastRefreshDetails.completed_at)}
+                        </p>
+                        <p className="muted vuln-status-inline">
+                          Refreshed: {formatDateTime(lastRefreshDetails.refreshed_at)}
+                        </p>
+                      </div>
+                    )}
+
+                    <p className="muted vuln-status-inline">
+                      Counts can differ between scans when discovered ports/services differ.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="device-tab-panel">
@@ -1541,79 +1650,6 @@ export default function DeviceDetail() {
                         {vulnStatusLoaded && vulnStatusMessage && (
                           <p className="warning-text vuln-status-inline">{vulnStatusMessage}</p>
                         )}
-                        <div className="field-stack vuln-port-field">
-                          <label htmlFor="history-refresh-mode">Refresh Mode</label>
-                          <select
-                            id="history-refresh-mode"
-                            value={historyRefreshMode}
-                            disabled={historyRefreshing || vulnTriggering || loading || !device}
-                            onChange={(event) => setHistoryRefreshMode(event.target.value)}
-                          >
-                            <option value="selected">Single Scan (Replace)</option>
-                            <option value="all">All Scans (Deduped)</option>
-                          </select>
-                        </div>
-                        {completedGreenboneScans.length > 0 && historyRefreshMode === 'selected' && (
-                          <div className="field-stack vuln-port-field">
-                            <label htmlFor="history-scan-id">Refresh Scan</label>
-                            <select
-                              id="history-scan-id"
-                              value={historyScanId}
-                              disabled={historyRefreshing || vulnTriggering || loading || !device}
-                              onChange={(event) => setHistoryScanId(event.target.value)}
-                            >
-                              {completedGreenboneScans.map((scan) => (
-                                <option key={scan.id} value={scan.id}>
-                                  #{scan.id} - {formatDateTime(scan.completed_at || scan.started_at)}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                        <button
-                          type="button"
-                          className="small-button"
-                          disabled={
-                            !vulnEnabled
-                            || !vulnStatusLoaded
-                            || historyRefreshing
-                            || vulnTriggering
-                            || loading
-                            || !device
-                            || completedGreenboneScans.length === 0
-                            || (historyRefreshMode === 'selected' && !historyScanId)
-                          }
-                          onClick={refreshFromGreenboneHistory}
-                        >
-                          {historyRefreshing
-                            ? 'Refreshing...'
-                            : (historyRefreshMode === 'all'
-                              ? 'Refresh From All Greenbone Scans'
-                              : 'Refresh From Selected Greenbone Scan')}
-                        </button>
-                        {lastRefreshDetails && (
-                          <div className="field-stack vuln-port-field">
-                            <label>Last Refresh Context</label>
-                            <p className="muted vuln-status-inline">
-                              Mode: {lastRefreshDetails.mode === 'all' ? 'All Scans (Deduped)' : 'Single Scan (Replace)'}
-                            </p>
-                            <p className="muted vuln-status-inline">
-                              Scan #{lastRefreshDetails.scan_id || '-'} | Report: {lastRefreshDetails.report_id || '-'}
-                            </p>
-                            <p className="muted vuln-status-inline">
-                              Task: {lastRefreshDetails.external_task_id || '-'}
-                            </p>
-                            <p className="muted vuln-status-inline">
-                              Completed: {formatDateTime(lastRefreshDetails.completed_at)}
-                            </p>
-                            <p className="muted vuln-status-inline">
-                              Refreshed: {formatDateTime(lastRefreshDetails.refreshed_at)}
-                            </p>
-                          </div>
-                        )}
-                        <p className="muted vuln-status-inline">
-                          Counts can differ between scans when discovered ports/services differ.
-                        </p>
                       </div>
                     </section>
                   </div>

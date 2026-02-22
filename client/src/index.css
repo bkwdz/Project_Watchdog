@@ -466,13 +466,49 @@ select:focus {
   gap: 14px;
 }
 
-.device-tab-list {
+.device-console-topbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 14px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-soft);
+  position: relative;
+}
+
+.device-tab-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.device-refresh-shell {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.device-refresh-trigger {
+  min-width: 116px;
+}
+
+.device-refresh-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(420px, calc(100vw - 56px));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: rgba(7, 15, 31, 0.98);
+  box-shadow: var(--shadow-md);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  z-index: 45;
 }
 
 .device-tab-button {
@@ -1566,6 +1602,15 @@ select:focus {
     padding-top: 12px;
   }
 
+  .device-console-topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .device-refresh-shell {
+    align-self: flex-end;
+  }
+
   .device-tab-button {
     flex: 1 1 calc(50% - 8px);
     text-align: center;
@@ -1612,5 +1657,19 @@ select:focus {
 
   .device-tab-button {
     flex: 1 1 100%;
+  }
+
+  .device-refresh-shell {
+    align-self: stretch;
+  }
+
+  .device-refresh-trigger {
+    width: 100%;
+  }
+
+  .device-refresh-popover {
+    left: 0;
+    right: 0;
+    width: auto;
   }
 }
