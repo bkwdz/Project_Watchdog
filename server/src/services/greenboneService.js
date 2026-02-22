@@ -1865,24 +1865,26 @@ function parseReportData(rootNode) {
       }
     }
 
-    if (!informational) {
-      vulnerabilities.push({
-        host,
-        port: portDescriptor.port,
-        cve: cveList[0] || parseCve(extractText(result.nvt?.cve) || extractText(result.cve)),
-        cve_list: cveList,
-        nvt_oid: nvtOid,
-        name,
-        severity: cvssSeverity,
-        cvss_score: cvssScore,
-        cvss_severity: cvssSeverity,
-        qod,
-        cvss_vector: cvssVector,
-        solution,
-        description,
-        source: 'greenbone',
-      });
-    }
+    const effectiveSeverity = informational
+      ? (normalizeText(threatText) || cvssSeverity || 'Log')
+      : cvssSeverity;
+
+    vulnerabilities.push({
+      host,
+      port: portDescriptor.port,
+      cve: cveList[0] || parseCve(extractText(result.nvt?.cve) || extractText(result.cve)),
+      cve_list: cveList,
+      nvt_oid: nvtOid,
+      name,
+      severity: effectiveSeverity,
+      cvss_score: cvssScore,
+      cvss_severity: effectiveSeverity,
+      qod,
+      cvss_vector: cvssVector,
+      solution,
+      description,
+      source: 'greenbone',
+    });
   });
 
   const hostDetailNodes = collectNodesByKey(rootNode, 'host', [])

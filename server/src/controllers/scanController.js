@@ -437,6 +437,36 @@ async function findScanById(scanId) {
   return scanResult.rows[0] || null;
 }
 
+async function findLatestCompletedGreenboneScanForDeviceIp(ipAddress) {
+  const safeIp = String(ipAddress || '').trim();
+
+  if (!isValidIPv4(safeIp)) {
+    return null;
+  }
+
+  const result = await query(
+    `
+      SELECT ${SCAN_COLUMNS}
+      FROM scans
+      WHERE COALESCE(scanner_type, 'nmap') = 'greenbone'
+        AND status = 'completed'
+        AND external_task_id IS NOT NULL
+        AND (
+          target = $1
+          OR (
+            POSITION('/' IN target) > 0
+            AND $1::inet << target::cidr
+          )
+        )
+      ORDER BY completed_at DESC NULLS LAST, started_at DESC NULLS LAST, id DESC
+      LIMIT 1
+    `,
+    [safeIp],
+  );
+
+  return result.rows[0] || null;
+}
+
 async function updateScan(scanId, fields) {
   const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
 
@@ -621,7 +651,7 @@ async function upsertSshHostKey(client, deviceId, entry) {
   );
 }
 
-async function storeGreenboneReportData(scan, reportData) {
+async function storeGreenboneReportData(scan, reportData, { replaceExisting = false } = {}) {
   const vulnerabilities = Array.isArray(reportData?.vulnerabilities) ? reportData.vulnerabilities : [];
   const ports = Array.isArray(reportData?.ports) ? reportData.ports : [];
   const osDetections = Array.isArray(reportData?.osDetections) ? reportData.osDetections : [];
@@ -650,8 +680,18 @@ async function storeGreenboneReportData(scan, reportData) {
       [scan.id],
     );
 
-    if (existingCountResult.rows[0].count > 0) {
+    if (!replaceExisting && existingCountResult.rows[0].count > 0) {
       return existingCountResult.rows[0].count;
+    }
+
+    if (replaceExisting && existingCountResult.rows[0].count > 0) {
+      await client.query(
+        `
+          DELETE FROM vulnerabilities
+          WHERE scan_id = $1
+        `,
+        [scan.id],
+      );
     }
 
     const fallbackIp = isValidIPv4(scan.target) ? scan.target : null;
@@ -1260,6 +1300,64 @@ exports.createVulnerabilityScan = async (req, res, next) => {
       });
 
       const mappedError = toControllerError(error, 'Unable to start vulnerability scan');
+      return res.status(mappedError.statusCode).json(mappedError.payload);
+    }
+  } catch (err) {
+    return next(err);
+  }
+};
+
+exports.refreshDeviceFromGreenboneHistory = async (req, res, next) => {
+  try {
+    if (!isGreenboneEnabled()) {
+      return res.status(503).json({ error: GREENBONE_DISABLED_MESSAGE });
+    }
+
+    const deviceId = Number(req.params.deviceId);
+
+    if (!Number.isInteger(deviceId) || deviceId < 1) {
+      return res.status(400).json({ error: 'invalid device id' });
+    }
+
+    const deviceResult = await query(
+      `
+        SELECT id, ip_address
+        FROM devices
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [deviceId],
+    );
+    const device = deviceResult.rows[0];
+
+    if (!device?.ip_address) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+
+    const scan = await findLatestCompletedGreenboneScanForDeviceIp(device.ip_address);
+
+    if (!scan) {
+      return res.status(404).json({
+        error: 'No completed vulnerability scan history found for this device',
+      });
+    }
+
+    try {
+      const reportData = await fetchAndParseReport(scan.external_task_id, null);
+      const inserted = await storeGreenboneReportData(scan, reportData, {
+        replaceExisting: true,
+      });
+
+      return res.json({
+        refreshed: true,
+        device_id: deviceId,
+        scan_id: scan.id,
+        external_task_id: scan.external_task_id,
+        report_id: reportData.reportId,
+        vulnerabilities_imported: inserted,
+      });
+    } catch (error) {
+      const mappedError = toControllerError(error, 'Unable to refresh device data from Greenbone history');
       return res.status(mappedError.statusCode).json(mappedError.payload);
     }
   } catch (err) {

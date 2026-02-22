@@ -5,6 +5,7 @@ import {
   createVulnerabilityScan,
   getDeviceById,
   getScanById,
+  refreshDeviceFromGreenboneHistory,
   getVulnerabilityCredentials,
   updateDevice,
   getVulnerabilityScanConfigs,
@@ -186,6 +187,7 @@ export default function DeviceDetail() {
   const [vulnConfigsLoaded, setVulnConfigsLoaded] = useState(false);
   const [vulnTcpPorts, setVulnTcpPorts] = useState('1-1000');
   const [vulnUdpPorts, setVulnUdpPorts] = useState('');
+  const [historyRefreshing, setHistoryRefreshing] = useState(false);
   const [useCredentials, setUseCredentials] = useState(false);
   const [credentialMode, setCredentialMode] = useState('existing');
   const [credentialType, setCredentialType] = useState('ssh');
@@ -463,6 +465,28 @@ export default function DeviceDetail() {
       pushToast(apiMessage || 'Unable to start vulnerability scan.', 'error');
     } finally {
       setVulnTriggering(false);
+    }
+  };
+
+  const refreshFromGreenboneHistory = async () => {
+    if (!device?.id) {
+      return;
+    }
+
+    setHistoryRefreshing(true);
+
+    try {
+      const result = await refreshDeviceFromGreenboneHistory(device.id);
+      await loadDevice();
+      await loadScans();
+      pushToast(
+        `Refreshed from Greenbone scan #${result?.scan_id ?? '?'}.`,
+        'success',
+      );
+    } catch (err) {
+      pushToast(err?.response?.data?.error || 'Unable to refresh from Greenbone history.', 'error');
+    } finally {
+      setHistoryRefreshing(false);
     }
   };
   const relatedScans = useMemo(() => {
@@ -1262,6 +1286,14 @@ export default function DeviceDetail() {
                         {vulnStatusLoaded && vulnStatusMessage && (
                           <p className="warning-text vuln-status-inline">{vulnStatusMessage}</p>
                         )}
+                        <button
+                          type="button"
+                          className="small-button"
+                          disabled={!vulnEnabled || !vulnStatusLoaded || historyRefreshing || vulnTriggering || loading || !device}
+                          onClick={refreshFromGreenboneHistory}
+                        >
+                          {historyRefreshing ? 'Refreshing...' : 'Refresh From Greenbone History'}
+                        </button>
                       </div>
                     </section>
                   </div>

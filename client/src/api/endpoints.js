@@ -71,6 +71,11 @@ export async function createVulnerabilityScan(
   return response.data;
 }
 
+export async function refreshDeviceFromGreenboneHistory(deviceId) {
+  const response = await api.post(`/scans/vuln/refresh-device/${deviceId}`);
+  return response.data;
+}
+
 export async function getVulnerabilityScannerStatus() {
   const response = await api.get('/scans/vuln/status');
   return response.data;

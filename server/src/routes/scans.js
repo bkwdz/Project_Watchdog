@@ -12,6 +12,7 @@ router.get('/vuln/credentials', controller.getVulnerabilityCredentials);
 router.get('/vuln/settings', controller.getVulnerabilitySettings);
 router.put('/vuln/settings', controller.updateVulnerabilitySettings);
 router.post('/vuln', controller.createVulnerabilityScan);
+router.post('/vuln/refresh-device/:deviceId', controller.refreshDeviceFromGreenboneHistory);
 router.post('/', controller.createScan);
 
 // Backward-compatible alias for the current frontend.
