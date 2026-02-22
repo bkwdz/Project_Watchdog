@@ -5,11 +5,13 @@ import {
   createVulnerabilityScan,
   getDeviceById,
   getScanById,
+  getVulnerabilityCredentials,
   updateDevice,
   getVulnerabilityScanConfigs,
   getVulnerabilityScannerStatus,
 } from '../api/endpoints';
 import Card from '../components/Card';
+import CredentialFields from '../components/CredentialFields';
 import DataTable from '../components/DataTable';
 import HoverProfileSelect from '../components/HoverProfileSelect';
 import PieChart from '../components/PieChart';
@@ -167,6 +169,15 @@ export default function DeviceDetail() {
   const [vulnConfigsLoaded, setVulnConfigsLoaded] = useState(false);
   const [vulnTcpPorts, setVulnTcpPorts] = useState('1-1000');
   const [vulnUdpPorts, setVulnUdpPorts] = useState('');
+  const [useCredentials, setUseCredentials] = useState(false);
+  const [credentialMode, setCredentialMode] = useState('existing');
+  const [credentialType, setCredentialType] = useState('ssh');
+  const [credentialOptions, setCredentialOptions] = useState([]);
+  const [credentialsLoading, setCredentialsLoading] = useState(false);
+  const [credentialId, setCredentialId] = useState('');
+  const [credentialName, setCredentialName] = useState('');
+  const [credentialUsername, setCredentialUsername] = useState('');
+  const [credentialPassword, setCredentialPassword] = useState('');
 
   const [hostnameEditing, setHostnameEditing] = useState(false);
   const [hostnameDraft, setHostnameDraft] = useState('');
@@ -247,6 +258,29 @@ export default function DeviceDetail() {
     }
   }, []);
 
+  const loadVulnerabilityCredentials = useCallback(async (type) => {
+    setCredentialsLoading(true);
+
+    try {
+      const data = await getVulnerabilityCredentials(type);
+      const entries = Array.isArray(data?.credentials) ? data.credentials : [];
+      setCredentialOptions(entries);
+      setCredentialId((current) => {
+        if (current && entries.some((entry) => String(entry.id) === String(current))) {
+          return current;
+        }
+
+        return entries[0]?.id ? String(entries[0].id) : '';
+      });
+    } catch (err) {
+      setCredentialOptions([]);
+      setCredentialId('');
+      pushToast(err?.response?.data?.error || 'Unable to load saved credentials.', 'error');
+    } finally {
+      setCredentialsLoading(false);
+    }
+  }, [pushToast]);
+
   useEffect(() => {
     void loadDevice();
     void loadVulnerabilityStatus();
@@ -266,6 +300,21 @@ export default function DeviceDetail() {
 
     void loadVulnerabilityConfigs();
   }, [loadVulnerabilityConfigs, vulnEnabled, vulnStatusLoaded]);
+
+  useEffect(() => {
+    if (!useCredentials || credentialMode !== 'existing' || !vulnEnabled || !vulnStatusLoaded) {
+      return;
+    }
+
+    void loadVulnerabilityCredentials(credentialType);
+  }, [
+    credentialMode,
+    credentialType,
+    loadVulnerabilityCredentials,
+    useCredentials,
+    vulnEnabled,
+    vulnStatusLoaded,
+  ]);
 
   useEffect(() => {
     if (!activeScan?.id) {
@@ -344,9 +393,43 @@ export default function DeviceDetail() {
     setVulnTriggering(true);
 
     try {
+      let credentials = { mode: 'none' };
+
+      if (useCredentials) {
+        if (credentialMode === 'existing') {
+          const parsedCredentialId = Number(credentialId);
+
+          if (!Number.isInteger(parsedCredentialId) || parsedCredentialId < 1) {
+            throw new Error('Select a saved credential before starting the scan.');
+          }
+
+          credentials = {
+            mode: 'existing',
+            type: credentialType,
+            credential_id: parsedCredentialId,
+          };
+        } else {
+          const username = credentialUsername.trim();
+          const password = credentialPassword.trim();
+
+          if (!username || !password) {
+            throw new Error('Credential username and password are required.');
+          }
+
+          credentials = {
+            mode: 'new',
+            type: credentialType,
+            name: credentialName.trim(),
+            username,
+            password,
+          };
+        }
+      }
+
       const scan = await createVulnerabilityScan(targetIp, vulnConfigId, {
         tcpPorts: vulnTcpPorts,
         udpPorts: vulnUdpPorts,
+        credentials,
       });
       registerScan(scan);
       pushToast(`Vulnerability scan #${scan.id} started.`, 'success');
@@ -786,7 +869,7 @@ export default function DeviceDetail() {
                 <dd>{device.mac_address || device.mac || '-'}</dd>
               </div>
               <div>
-                <dt>Best OS Guess</dt>
+                <dt>OS</dt>
                 <dd>{bestOsLabel}</dd>
               </div>
               <div>
@@ -981,6 +1064,26 @@ export default function DeviceDetail() {
                           </div>
                         </div>
 
+                        <CredentialFields
+                          useCredentials={useCredentials}
+                          setUseCredentials={setUseCredentials}
+                          credentialMode={credentialMode}
+                          setCredentialMode={setCredentialMode}
+                          credentialType={credentialType}
+                          setCredentialType={setCredentialType}
+                          credentialId={credentialId}
+                          setCredentialId={setCredentialId}
+                          credentialName={credentialName}
+                          setCredentialName={setCredentialName}
+                          credentialUsername={credentialUsername}
+                          setCredentialUsername={setCredentialUsername}
+                          credentialPassword={credentialPassword}
+                          setCredentialPassword={setCredentialPassword}
+                          credentialOptions={credentialOptions}
+                          credentialsLoading={credentialsLoading}
+                          disabled={vulnTriggering || loading || !device}
+                        />
+
                         {!vulnConfigsLoaded && vulnEnabled && (
                           <p className="muted vuln-status-inline">Loading vulnerability scan profiles...</p>
                         )}
@@ -1111,14 +1214,13 @@ export default function DeviceDetail() {
                           <th>Service</th>
                           <th>Version</th>
                           <th>State</th>
-                          <th>Confidence</th>
                           <th className="align-right">Details</th>
                         </tr>
                       </thead>
                       <tbody>
                         {portRows.length === 0 && (
                           <tr>
-                            <td colSpan={7} className="table-empty">No port data for this device yet.</td>
+                            <td colSpan={6} className="table-empty">No port data for this device yet.</td>
                           </tr>
                         )}
 
@@ -1137,8 +1239,6 @@ export default function DeviceDetail() {
                           );
                           const hasDetails = Object.keys(metadata).length > 0 || Object.keys(scriptResults).length > 0;
                           const isExpanded = Boolean(expandedPorts[rowKey]);
-                          const confidenceRaw = Number.parseFloat(row.source_confidence);
-                          const confidenceLabel = Number.isFinite(confidenceRaw) ? `${Math.round(confidenceRaw * 100)}%` : '-';
 
                           return (
                             <Fragment key={rowKey}>
@@ -1148,7 +1248,6 @@ export default function DeviceDetail() {
                                 <td>{row.service || '-'}</td>
                                 <td>{row.version || '-'}</td>
                                 <td><StatusBadge status={row.state} /></td>
-                                <td>{confidenceLabel}</td>
                                 <td className="align-right">
                                   <button
                                     type="button"
@@ -1162,7 +1261,7 @@ export default function DeviceDetail() {
                               </tr>
                               {isExpanded && (
                                 <tr className="port-detail-row">
-                                  <td colSpan={7}>
+                                  <td colSpan={6}>
                                     <div className="port-detail-panel">
                                       {Object.keys(scriptResults).length > 0 && (
                                         <section className="port-detail-section">

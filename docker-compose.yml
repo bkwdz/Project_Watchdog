@@ -27,6 +27,8 @@ services:
       - DATABASE_URL=postgresql://watchdog:watchdogpass@postgres:5432/watchdog
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost}
       - SESSION_SECRET=${SESSION_SECRET:-dev_secret}
+      - JWT_SECRET=${JWT_SECRET:-dev_secret_change_me}
+      - CREDENTIAL_ENCRYPTION_KEY_BASE64=${CREDENTIAL_ENCRYPTION_KEY_BASE64}
       - GREENBONE_ENABLED=${GREENBONE_ENABLED:-true}
       - GREENBONE_HOST=${GREENBONE_HOST:-gvmd}
       - GREENBONE_PORT=${GREENBONE_PORT:-9390}

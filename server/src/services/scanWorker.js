@@ -3,7 +3,6 @@ const { runNmapScan, parseNmapXml } = require('./nmapService');
 const {
   upsertDeviceRecord,
   upsertPortRecord,
-  sourceConfidence,
 } = require('./dataReconciliation');
 
 const queue = [];
@@ -85,7 +84,7 @@ async function upsertDeviceAndPorts(scanType, host) {
           },
         },
         source: 'nmap',
-        confidence: sourceConfidence('nmap'),
+        confidence: 1,
       });
     }
 
