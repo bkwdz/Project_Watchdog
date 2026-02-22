@@ -831,6 +831,10 @@ select:focus {
   gap: 8px;
 }
 
+.scan-summary-note {
+  margin-top: 10px;
+}
+
 .summary-list {
   margin: 0;
   padding-left: 18px;
@@ -1044,6 +1048,12 @@ select:focus {
   color: #8de0b3;
   background: rgba(90, 214, 138, 0.16);
   border-color: rgba(90, 214, 138, 0.34);
+}
+
+.severity-log {
+  color: #cfd9f2;
+  background: rgba(150, 170, 210, 0.14);
+  border-color: rgba(150, 170, 210, 0.32);
 }
 
 .severity-medium {

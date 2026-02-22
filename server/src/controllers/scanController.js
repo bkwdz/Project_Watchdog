@@ -1038,93 +1038,250 @@ async function getScanVulnerabilities(scanId) {
   return vulnerabilityResult.rows;
 }
 
+function buildTargetPredicate(target, columnRef, paramPosition = 1) {
+  const safeTarget = normalizeTarget(target);
+
+  if (isValidCidr(safeTarget)) {
+    return {
+      clause: `${columnRef} << $${paramPosition}::cidr`,
+      params: [safeTarget],
+    };
+  }
+
+  if (isValidIPv4(safeTarget)) {
+    return {
+      clause: `${columnRef} = $${paramPosition}::inet`,
+      params: [safeTarget],
+    };
+  }
+
+  return null;
+}
+
+function summarizeTopServices(portRows, limit = 8) {
+  const counts = new Map();
+
+  (Array.isArray(portRows) ? portRows : []).forEach((row) => {
+    const key = String(row?.service || 'unknown').trim().toLowerCase() || 'unknown';
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+
+  return [...counts.entries()]
+    .map(([service, count]) => ({ service, count }))
+    .sort((left, right) => right.count - left.count || left.service.localeCompare(right.service))
+    .slice(0, limit);
+}
+
+async function getNmapTargetDevices(scan, { enforceWindow = true } = {}) {
+  const targetPredicate = buildTargetPredicate(scan.target, 'd.ip_address', 1);
+
+  if (!targetPredicate) {
+    return [];
+  }
+
+  const params = [...targetPredicate.params];
+  let windowClause = '';
+
+  if (enforceWindow && scan.started_at) {
+    params.push(scan.started_at);
+    params.push(scan.completed_at || new Date());
+    windowClause = `AND d.last_seen >= $${params.length - 1} AND d.last_seen <= $${params.length}`;
+  }
+
+  const result = await query(
+    `
+      SELECT
+        d.id,
+        d.ip_address,
+        d.display_name,
+        d.hostname,
+        d.os_guess,
+        d.online_status,
+        d.last_seen,
+        COALESCE(COUNT(p.id) FILTER (WHERE p.state = 'open'), 0)::int AS open_ports,
+        COALESCE(COUNT(p.id) FILTER (WHERE p.state = 'open' AND p.protocol = 'tcp'), 0)::int AS tcp_open_ports,
+        COALESCE(COUNT(p.id) FILTER (WHERE p.state = 'open' AND p.protocol = 'udp'), 0)::int AS udp_open_ports
+      FROM devices d
+      LEFT JOIN ports p ON p.device_id = d.id
+      WHERE ${targetPredicate.clause}
+      ${windowClause}
+      GROUP BY d.id
+      ORDER BY open_ports DESC, d.last_seen DESC NULLS LAST, d.id ASC
+    `,
+    params,
+  );
+
+  return result.rows;
+}
+
+async function getNmapTargetOpenPorts(scan, { enforceWindow = true, limit = 500 } = {}) {
+  const targetPredicate = buildTargetPredicate(scan.target, 'd.ip_address', 1);
+
+  if (!targetPredicate) {
+    return [];
+  }
+
+  const params = [...targetPredicate.params];
+  let windowClause = '';
+
+  if (enforceWindow && scan.started_at) {
+    params.push(scan.started_at);
+    params.push(scan.completed_at || new Date());
+    windowClause = `AND d.last_seen >= $${params.length - 1} AND d.last_seen <= $${params.length}`;
+  }
+
+  params.push(limit);
+
+  const result = await query(
+    `
+      SELECT
+        p.id,
+        p.device_id,
+        d.ip_address,
+        COALESCE(NULLIF(d.display_name, ''), NULLIF(d.hostname, ''), d.ip_address::text) AS device_name,
+        p.port,
+        p.protocol,
+        p.service,
+        p.version,
+        p.state,
+        p.script_results,
+        p.metadata,
+        p.last_source,
+        p.source_confidence
+      FROM ports p
+      INNER JOIN devices d ON d.id = p.device_id
+      WHERE ${targetPredicate.clause}
+        ${windowClause}
+        AND p.state = 'open'
+      ORDER BY d.ip_address ASC, p.port ASC, p.protocol ASC
+      LIMIT $${params.length}
+    `,
+    params,
+  );
+
+  return result.rows;
+}
+
 async function buildNmapSummary(scan) {
-  if (!scan.started_at) {
-    return {
-      hosts_up: 0,
-      ports_observed: 0,
-    };
+  const hasWindow = Boolean(scan.started_at);
+  let scope = hasWindow ? 'scan_window' : 'target_snapshot';
+
+  let discoveredDevices = await getNmapTargetDevices(scan, { enforceWindow: hasWindow });
+  let openPorts = await getNmapTargetOpenPorts(scan, { enforceWindow: hasWindow });
+
+  if (hasWindow && discoveredDevices.length === 0 && openPorts.length === 0) {
+    discoveredDevices = await getNmapTargetDevices(scan, { enforceWindow: false });
+    openPorts = await getNmapTargetOpenPorts(scan, { enforceWindow: false });
+    scope = 'target_snapshot';
   }
-
-  const windowStart = scan.started_at;
-  const windowEnd = scan.completed_at || new Date();
-
-  if (isValidCidr(scan.target)) {
-    const hostCountResult = await query(
-      `
-        SELECT COUNT(*)::int AS hosts_up
-        FROM devices
-        WHERE ip_address << $1::cidr
-          AND last_seen >= $2
-          AND last_seen <= $3
-      `,
-      [scan.target, windowStart, windowEnd],
-    );
-
-    const portCountResult = await query(
-      `
-        SELECT COUNT(p.id)::int AS ports_observed
-        FROM ports p
-        INNER JOIN devices d ON d.id = p.device_id
-        WHERE d.ip_address << $1::cidr
-          AND d.last_seen >= $2
-          AND d.last_seen <= $3
-      `,
-      [scan.target, windowStart, windowEnd],
-    );
-
-    return {
-      hosts_up: hostCountResult.rows[0].hosts_up,
-      ports_observed: portCountResult.rows[0].ports_observed,
-    };
-  }
-
-  const deviceResult = await query(
-    `
-      SELECT id, last_seen
-      FROM devices
-      WHERE ip_address = $1::inet
-      LIMIT 1
-    `,
-    [scan.target],
-  );
-
-  const device = deviceResult.rows[0];
-
-  if (!device || device.last_seen < windowStart || device.last_seen > windowEnd) {
-    return {
-      hosts_up: 0,
-      ports_observed: 0,
-    };
-  }
-
-  const portsResult = await query(
-    `
-      SELECT COUNT(*)::int AS ports_observed
-      FROM ports
-      WHERE device_id = $1
-    `,
-    [device.id],
-  );
 
   return {
-    hosts_up: 1,
-    ports_observed: portsResult.rows[0].ports_observed,
+    summary: {
+      hosts_up: discoveredDevices.length,
+      ports_observed: openPorts.length,
+      tcp_open_ports: openPorts.filter((row) => String(row.protocol || '').toLowerCase() === 'tcp').length,
+      udp_open_ports: openPorts.filter((row) => String(row.protocol || '').toLowerCase() === 'udp').length,
+      top_services: summarizeTopServices(openPorts),
+      scope,
+      scope_note: scope === 'scan_window'
+        ? 'Derived from device updates captured during this scan window.'
+        : 'No device updates were recorded in the scan window; showing latest target snapshot.',
+    },
+    discovered_devices: discoveredDevices,
+    open_ports: openPorts,
   };
+}
+
+async function getGreenboneAffectedDevices(scanId) {
+  const result = await query(
+    `
+      SELECT
+        d.id,
+        d.ip_address,
+        d.display_name,
+        d.hostname,
+        d.os_guess,
+        COUNT(v.id)::int AS findings_total,
+        COUNT(v.id) FILTER (
+          WHERE (
+            LOWER(COALESCE(v.cvss_severity, v.severity, '')) IN ('log', 'info', 'informational', 'none')
+            OR COALESCE(v.cvss_score, 0) <= 0
+          )
+        )::int AS informational_count,
+        COUNT(v.id) FILTER (
+          WHERE NOT (
+            LOWER(COALESCE(v.cvss_severity, v.severity, '')) IN ('log', 'info', 'informational', 'none')
+            OR COALESCE(v.cvss_score, 0) <= 0
+          )
+        )::int AS actionable_count,
+        COUNT(v.id) FILTER (WHERE LOWER(COALESCE(v.cvss_severity, v.severity, '')) = 'critical')::int AS critical_count,
+        COUNT(v.id) FILTER (WHERE LOWER(COALESCE(v.cvss_severity, v.severity, '')) = 'high')::int AS high_count
+      FROM vulnerabilities v
+      INNER JOIN devices d ON d.id = v.device_id
+      WHERE v.scan_id = $1
+      GROUP BY d.id
+      ORDER BY findings_total DESC, d.id ASC
+    `,
+    [scanId],
+  );
+
+  return result.rows;
 }
 
 async function buildGreenboneSummary(scan) {
   const summaryResult = await query(
     `
+      WITH vuln AS (
+        SELECT
+          device_id,
+          port,
+          nvt_oid,
+          name,
+          cvss_score,
+          qod,
+          cve,
+          cve_list,
+          LOWER(COALESCE(cvss_severity, severity, '')) AS normalized_severity
+        FROM vulnerabilities
+        WHERE scan_id = $1
+      ),
+      cve_tokens AS (
+        SELECT UNNEST(COALESCE(v.cve_list, ARRAY[]::text[])) AS token
+        FROM vuln v
+        UNION ALL
+        SELECT v.cve AS token
+        FROM vuln v
+        WHERE v.cve IS NOT NULL
+      )
       SELECT
         COUNT(*)::int AS vulnerabilities_total,
-        COUNT(*) FILTER (WHERE COALESCE(cvss_severity, severity) ILIKE 'critical')::int AS critical_count,
-        COUNT(*) FILTER (WHERE COALESCE(cvss_severity, severity) ILIKE 'high')::int AS high_count,
-        COUNT(*) FILTER (WHERE COALESCE(cvss_severity, severity) ILIKE 'medium')::int AS medium_count,
-        COUNT(*) FILTER (WHERE COALESCE(cvss_severity, severity) ILIKE 'low')::int AS low_count,
-        COUNT(DISTINCT device_id)::int AS affected_devices
-      FROM vulnerabilities
-      WHERE scan_id = $1
+        COUNT(*) FILTER (
+          WHERE (
+            normalized_severity IN ('log', 'info', 'informational', 'none')
+            OR COALESCE(cvss_score, 0) <= 0
+          )
+        )::int AS informational_count,
+        COUNT(*) FILTER (
+          WHERE NOT (
+            normalized_severity IN ('log', 'info', 'informational', 'none')
+            OR COALESCE(cvss_score, 0) <= 0
+          )
+        )::int AS actionable_count,
+        COUNT(*) FILTER (WHERE normalized_severity = 'critical')::int AS critical_count,
+        COUNT(*) FILTER (WHERE normalized_severity = 'high')::int AS high_count,
+        COUNT(*) FILTER (WHERE normalized_severity = 'medium')::int AS medium_count,
+        COUNT(*) FILTER (WHERE normalized_severity = 'low')::int AS low_count,
+        COUNT(*) FILTER (WHERE normalized_severity IN ('log', 'info', 'informational', 'none'))::int AS log_count,
+        COUNT(DISTINCT device_id)::int AS affected_devices,
+        COUNT(DISTINCT port) FILTER (WHERE port IS NOT NULL)::int AS affected_ports,
+        COUNT(DISTINCT COALESCE(NULLIF(nvt_oid, ''), LOWER(name)))::int AS unique_findings,
+        (
+          SELECT COUNT(DISTINCT UPPER(TRIM(token)))::int
+          FROM cve_tokens
+          WHERE token ~* '^CVE-\\d{4}-\\d{4,}$'
+        ) AS unique_cves,
+        ROUND(AVG(qod) FILTER (WHERE qod IS NOT NULL) * 100, 1) AS avg_qod_percent
+      FROM vuln
     `,
     [scan.id],
   );
@@ -1137,7 +1294,16 @@ async function buildGreenboneSummary(scan) {
     high_count: row.high_count,
     medium_count: row.medium_count,
     low_count: row.low_count,
+    log_count: row.log_count,
+    actionable_count: row.actionable_count,
+    informational_count: row.informational_count,
     affected_devices: row.affected_devices,
+    affected_ports: row.affected_ports,
+    unique_findings: row.unique_findings,
+    unique_cves: row.unique_cves,
+    avg_qod_percent: Number.isFinite(Number.parseFloat(row.avg_qod_percent))
+      ? Number.parseFloat(row.avg_qod_percent)
+      : null,
   };
 }
 
@@ -1673,6 +1839,8 @@ exports.getScan = async (req, res, next) => {
 
     let summary;
     let vulnerabilities = [];
+    let discoveredDevices = [];
+    let nmapOpenPorts = [];
 
     if (scan.scanner_type === 'greenbone') {
       if (!isGreenboneEnabled()) {
@@ -1690,14 +1858,20 @@ exports.getScan = async (req, res, next) => {
 
       summary = await buildGreenboneSummary(scan);
       vulnerabilities = await getScanVulnerabilities(scan.id);
+      discoveredDevices = await getGreenboneAffectedDevices(scan.id);
     } else {
-      summary = await buildNmapSummary(scan);
+      const nmapResult = await buildNmapSummary(scan);
+      summary = nmapResult.summary;
+      discoveredDevices = nmapResult.discovered_devices;
+      nmapOpenPorts = nmapResult.open_ports;
     }
 
     return res.json({
       ...scan,
       summary,
       vulnerabilities,
+      discovered_devices: discoveredDevices,
+      nmap_open_ports: nmapOpenPorts,
     });
   } catch (err) {
     return next(err);
