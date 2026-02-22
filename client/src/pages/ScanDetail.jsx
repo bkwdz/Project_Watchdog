@@ -882,7 +882,7 @@ export default function ScanDetail() {
 
         {scan && (scan.status === 'completed' || scan.status === 'failed') && !isGreenbone && (
           <div className="dashboard-split-grid">
-            <div className="device-kpi-grid">
+            <div className="device-kpi-grid scan-kpi-compact">
               <div className="kpi-tile">
                 <p className="kpi-label">Hosts Up</p>
                 <p className="kpi-value">{summary.hosts_up ?? discoveredDevices.length}</p>

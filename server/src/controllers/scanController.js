@@ -1063,6 +1063,43 @@ async function getScanVulnerabilities(scanId) {
   return vulnerabilityResult.rows;
 }
 
+async function getScanVulnerabilitiesLegacy(scanId) {
+  const result = await query(
+    `
+      SELECT
+        v.id,
+        v.device_id,
+        v.scan_id,
+        d.ip_address::text AS device_ip,
+        COALESCE(NULLIF(d.hostname, ''), d.ip_address::text) AS device_name,
+        v.cve,
+        ARRAY[]::text[] AS cve_list,
+        NULL::text AS nvt_oid,
+        v.name,
+        v.severity,
+        v.cvss_score,
+        v.cvss_severity,
+        NULL::double precision AS qod,
+        NULL::text AS cvss_vector,
+        NULL::text AS solution,
+        v.port,
+        v.description,
+        v.source,
+        NULL::text AS port_protocol,
+        NULL::text AS port_state,
+        NULL::text AS port_service,
+        NULL::text AS port_version
+      FROM vulnerabilities v
+      INNER JOIN devices d ON d.id = v.device_id
+      WHERE v.scan_id = $1
+      ORDER BY v.cvss_score DESC NULLS LAST, v.id DESC
+    `,
+    [scanId],
+  );
+
+  return result.rows;
+}
+
 function buildTargetPredicate(target, columnRef, paramPosition = 1) {
   const safeTarget = normalizeTarget(target);
 
@@ -1260,6 +1297,32 @@ async function getGreenboneAffectedDevices(scanId) {
   return result.rows;
 }
 
+async function getGreenboneAffectedDevicesLegacy(scanId) {
+  const result = await query(
+    `
+      SELECT
+        d.id,
+        d.ip_address,
+        NULL::text AS display_name,
+        d.hostname,
+        d.os_guess,
+        COUNT(v.id)::int AS findings_total,
+        0::int AS informational_count,
+        COUNT(v.id)::int AS actionable_count,
+        COUNT(v.id) FILTER (WHERE LOWER(COALESCE(v.cvss_severity, v.severity, '')) = 'critical')::int AS critical_count,
+        COUNT(v.id) FILTER (WHERE LOWER(COALESCE(v.cvss_severity, v.severity, '')) = 'high')::int AS high_count
+      FROM vulnerabilities v
+      INNER JOIN devices d ON d.id = v.device_id
+      WHERE v.scan_id = $1
+      GROUP BY d.id
+      ORDER BY findings_total DESC, d.id ASC
+    `,
+    [scanId],
+  );
+
+  return result.rows;
+}
+
 async function buildGreenboneSummary(scan) {
   const summaryResult = await query(
     `
@@ -1336,6 +1399,42 @@ async function buildGreenboneSummary(scan) {
     avg_qod_percent: Number.isFinite(Number.parseFloat(row.avg_qod_percent))
       ? Number.parseFloat(row.avg_qod_percent)
       : null,
+  };
+}
+
+async function buildGreenboneSummaryLegacy(scan) {
+  const result = await query(
+    `
+      SELECT
+        COUNT(*)::int AS vulnerabilities_total,
+        COUNT(*) FILTER (WHERE LOWER(COALESCE(cvss_severity, severity, '')) = 'critical')::int AS critical_count,
+        COUNT(*) FILTER (WHERE LOWER(COALESCE(cvss_severity, severity, '')) = 'high')::int AS high_count,
+        COUNT(*) FILTER (WHERE LOWER(COALESCE(cvss_severity, severity, '')) = 'medium')::int AS medium_count,
+        COUNT(*) FILTER (WHERE LOWER(COALESCE(cvss_severity, severity, '')) = 'low')::int AS low_count,
+        COUNT(*) FILTER (WHERE LOWER(COALESCE(cvss_severity, severity, '')) IN ('log', 'info', 'informational', 'none'))::int AS log_count,
+        COUNT(DISTINCT device_id)::int AS affected_devices
+      FROM vulnerabilities
+      WHERE scan_id = $1
+    `,
+    [scan.id],
+  );
+
+  const row = result.rows[0] || {};
+
+  return {
+    vulnerabilities_total: Number(row.vulnerabilities_total || 0),
+    critical_count: Number(row.critical_count || 0),
+    high_count: Number(row.high_count || 0),
+    medium_count: Number(row.medium_count || 0),
+    low_count: Number(row.low_count || 0),
+    log_count: Number(row.log_count || 0),
+    actionable_count: Number(row.vulnerabilities_total || 0) - Number(row.log_count || 0),
+    informational_count: Number(row.log_count || 0),
+    affected_devices: Number(row.affected_devices || 0),
+    affected_ports: 0,
+    unique_findings: 0,
+    unique_cves: 0,
+    avg_qod_percent: null,
   };
 }
 
@@ -1888,9 +1987,26 @@ exports.getScan = async (req, res, next) => {
         }
       }
 
-      summary = await buildGreenboneSummary(scan);
-      vulnerabilities = await getScanVulnerabilities(scan.id);
-      discoveredDevices = await getGreenboneAffectedDevices(scan.id);
+      try {
+        summary = await buildGreenboneSummary(scan);
+      } catch (error) {
+        console.error(`Failed to build enriched Greenbone summary for scan ${scan.id}`, error);
+        summary = await buildGreenboneSummaryLegacy(scan);
+      }
+
+      try {
+        vulnerabilities = await getScanVulnerabilities(scan.id);
+      } catch (error) {
+        console.error(`Failed to load enriched vulnerabilities for scan ${scan.id}`, error);
+        vulnerabilities = await getScanVulnerabilitiesLegacy(scan.id);
+      }
+
+      try {
+        discoveredDevices = await getGreenboneAffectedDevices(scan.id);
+      } catch (error) {
+        console.error(`Failed to load enriched affected devices for scan ${scan.id}`, error);
+        discoveredDevices = await getGreenboneAffectedDevicesLegacy(scan.id);
+      }
     } else {
       const nmapResult = await buildNmapSummary(scan);
       summary = nmapResult.summary;

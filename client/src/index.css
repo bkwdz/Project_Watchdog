@@ -1147,6 +1147,19 @@ select:focus {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.scan-kpi-compact {
+  align-self: start;
+}
+
+.scan-kpi-compact .kpi-tile {
+  min-height: 0;
+  padding: 10px;
+}
+
+.scan-kpi-compact .kpi-value {
+  margin-top: 6px;
+}
+
 .kpi-tile {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
