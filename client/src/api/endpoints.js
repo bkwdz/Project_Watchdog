@@ -71,8 +71,16 @@ export async function createVulnerabilityScan(
   return response.data;
 }
 
-export async function refreshDeviceFromGreenboneHistory(deviceId, scanId = null) {
-  const payload = {};
+export async function refreshDeviceFromGreenboneHistory(
+  deviceId,
+  {
+    scanId = null,
+    mode = 'selected',
+  } = {},
+) {
+  const payload = {
+    mode: String(mode || 'selected').trim().toLowerCase() === 'all' ? 'all' : 'selected',
+  };
 
   if (Number.isInteger(Number(scanId)) && Number(scanId) > 0) {
     payload.scan_id = Number(scanId);

@@ -143,22 +143,6 @@ function toCveArray(row) {
   return [...cves];
 }
 
-function extractCvesFromValue(value) {
-  const cves = new Set();
-
-  const values = Array.isArray(value) ? value : [value];
-
-  values.forEach((entry) => {
-    String(entry || '')
-      .split(/[,\s;]+/)
-      .map((token) => token.trim().toUpperCase())
-      .filter((token) => /^CVE-\d{4}-\d{4,}$/.test(token))
-      .forEach((token) => cves.add(token));
-  });
-
-  return [...cves];
-}
-
 function normalizeApplicationCpe(value) {
   const normalized = String(value || '').trim().toLowerCase();
 
@@ -171,6 +155,93 @@ function normalizeApplicationCpe(value) {
   }
 
   return normalized;
+}
+
+function extractApplicationCpesFromValue(...values) {
+  const matches = values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n')
+    .match(/(?:cpe:\/a:[^\s,;|)\]]+|\/a:[^\s,;|)\]]+)/gi) || [];
+  const deduped = new Set();
+
+  matches.forEach((match) => {
+    const normalized = normalizeApplicationCpe(match.startsWith('/a:') ? `cpe:${match}` : match);
+
+    if (normalized) {
+      deduped.add(normalized);
+    }
+  });
+
+  return [...deduped];
+}
+
+function normalizeDisplaySeverity(value) {
+  const normalized = String(value || '').trim();
+
+  if (!normalized) {
+    return 'N/A';
+  }
+
+  if (/^log$|^none$|^info(?:rmational)?$/i.test(normalized)) {
+    return 'N/A';
+  }
+
+  const bucket = normalizeSeverityBucket(normalized);
+
+  if (bucket === 'critical') {
+    return 'Critical';
+  }
+
+  if (bucket === 'high') {
+    return 'High';
+  }
+
+  if (bucket === 'medium') {
+    return 'Medium';
+  }
+
+  if (bucket === 'low') {
+    return 'Low';
+  }
+
+  return normalized;
+}
+
+function severityRankWithUnknown(value) {
+  const normalized = normalizeDisplaySeverity(value);
+
+  if (normalized === 'N/A') {
+    return 0;
+  }
+
+  return severityRank(normalized);
+}
+
+function toFiniteNumber(value) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizePortNumber(value) {
+  const parsed = Number.parseInt(String(value ?? '').trim(), 10);
+
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function normalizeVulnerabilityName(row) {
+  const explicitName = String(row?.name || '').trim();
+
+  if (explicitName) {
+    return explicitName;
+  }
+
+  const oid = String(row?.nvt_oid || '').trim();
+  return oid ? `NVT ${oid}` : '';
 }
 
 function portKey(row) {
@@ -203,6 +274,7 @@ export default function DeviceDetail() {
   const [vulnUdpPorts, setVulnUdpPorts] = useState('');
   const [historyRefreshing, setHistoryRefreshing] = useState(false);
   const [historyScanId, setHistoryScanId] = useState('');
+  const [historyRefreshMode, setHistoryRefreshMode] = useState('selected');
   const [useCredentials, setUseCredentials] = useState(false);
   const [credentialMode, setCredentialMode] = useState('existing');
   const [credentialType, setCredentialType] = useState('ssh');
@@ -493,12 +565,19 @@ export default function DeviceDetail() {
     try {
       const result = await refreshDeviceFromGreenboneHistory(
         device.id,
-        historyScanId ? Number(historyScanId) : null,
+        {
+          mode: historyRefreshMode,
+          scanId: historyRefreshMode === 'all'
+            ? null
+            : (historyScanId ? Number(historyScanId) : null),
+        },
       );
       await loadDevice();
       await loadScans();
       pushToast(
-        `Refreshed from Greenbone scan #${result?.scan_id ?? '?'}.`,
+        result?.mode === 'all'
+          ? `Refreshed from all Greenbone scans (${result?.vulnerabilities_imported ?? 0} findings imported).`
+          : `Refreshed from Greenbone scan #${result?.scan_id ?? '?'}.`,
         'success',
       );
     } catch (err) {
@@ -549,64 +628,191 @@ export default function DeviceDetail() {
     () => (Array.isArray(device?.vulnerabilities) ? device.vulnerabilities : []),
     [device],
   );
-  const vulnerabilityRows = useMemo(
-    () => rawVulnerabilityRows.filter((row) => !isInformationalFinding(row)),
-    [rawVulnerabilityRows],
-  );
-  const hostLogRows = useMemo(
-    () => (Array.isArray(deviceMetadata.greenbone_logs) ? deviceMetadata.greenbone_logs : []),
-    [deviceMetadata.greenbone_logs],
-  );
-  const applicationRows = useMemo(() => {
-    const entries = Array.isArray(deviceMetadata.applications) ? deviceMetadata.applications : [];
+  const vulnerabilityRows = useMemo(() => {
     const aggregated = new Map();
+    const pickLonger = (left, right) => {
+      const leftText = String(left || '').trim();
+      const rightText = String(right || '').trim();
 
-    entries.forEach((entry) => {
-      const parsedEntry = typeof entry === 'string'
-        ? {
-          cpe: normalizeApplicationCpe(entry),
-          severity: 'Low',
-          cvss_score: null,
-        }
-        : {
-          cpe: normalizeApplicationCpe(entry?.cpe || entry?.value),
-          severity: entry?.severity || 'Low',
-          cvss_score: Number.parseFloat(entry?.cvss_score),
-        };
+      if (!leftText) {
+        return rightText || null;
+      }
 
-      if (!parsedEntry.cpe) {
+      if (!rightText) {
+        return leftText;
+      }
+
+      return rightText.length > leftText.length ? rightText : leftText;
+    };
+
+    rawVulnerabilityRows.forEach((row) => {
+      if (isInformationalFinding(row)) {
         return;
       }
 
-      const key = parsedEntry.cpe.toLowerCase();
-      const existing = aggregated.get(key);
+      const name = normalizeVulnerabilityName(row);
+      const oid = String(row?.nvt_oid || '').trim().toLowerCase();
+      const port = normalizePortNumber(row?.port);
+      const identity = oid || name.toLowerCase();
 
-      if (!existing) {
+      if (!identity) {
+        return;
+      }
+
+      const key = `${identity}|${port ?? 'none'}`;
+      const severity = normalizeDisplaySeverity(row?.cvss_severity || row?.severity);
+      const cvssScore = toFiniteNumber(row?.cvss_score);
+      const qod = toFiniteNumber(row?.qod);
+      const cveSet = new Set(toCveArray(row));
+      const current = aggregated.get(key);
+
+      if (!current) {
         aggregated.set(key, {
-          cpe: parsedEntry.cpe,
-          severity: parsedEntry.severity || 'Low',
-          cvss_score: Number.isFinite(parsedEntry.cvss_score) ? parsedEntry.cvss_score : null,
-          findings: 1,
+          ...row,
+          name,
+          port,
+          cve_list: [...cveSet],
+          cvss_severity: severity,
+          severity,
+          cvss_score: cvssScore,
+          qod,
         });
         return;
       }
 
-      existing.findings += 1;
+      current.cve_list = [...new Set([...(current.cve_list || []), ...cveSet])];
 
-      if (severityRank(parsedEntry.severity) > severityRank(existing.severity)) {
-        existing.severity = parsedEntry.severity;
+      if (severityRankWithUnknown(severity) > severityRankWithUnknown(current.cvss_severity)) {
+        current.cvss_severity = severity;
+        current.severity = severity;
       }
 
       if (
-        Number.isFinite(parsedEntry.cvss_score)
-        && (!Number.isFinite(existing.cvss_score) || parsedEntry.cvss_score > existing.cvss_score)
+        Number.isFinite(cvssScore)
+        && (!Number.isFinite(current.cvss_score) || cvssScore > current.cvss_score)
       ) {
-        existing.cvss_score = parsedEntry.cvss_score;
+        current.cvss_score = cvssScore;
+      }
+
+      if (Number.isFinite(qod) && (!Number.isFinite(current.qod) || qod > current.qod)) {
+        current.qod = qod;
+      }
+
+      current.solution = pickLonger(current.solution, row.solution);
+      current.description = pickLonger(current.description, row.description);
+      current.cvss_vector = pickLonger(current.cvss_vector, row.cvss_vector);
+
+      const currentScanId = Number.parseInt(current.scan_id, 10);
+      const nextScanId = Number.parseInt(row.scan_id, 10);
+      const currentRowId = Number.parseInt(current.id, 10);
+      const nextRowId = Number.parseInt(row.id, 10);
+      const shouldTakeLatest = (
+        (Number.isInteger(nextScanId) ? nextScanId : -1) > (Number.isInteger(currentScanId) ? currentScanId : -1)
+      ) || (
+        nextScanId === currentScanId
+        && (Number.isInteger(nextRowId) ? nextRowId : -1) > (Number.isInteger(currentRowId) ? currentRowId : -1)
+      );
+
+      if (shouldTakeLatest) {
+        current.id = row.id;
+        current.scan_id = row.scan_id;
+        current.source = row.source || current.source;
       }
     });
 
     return [...aggregated.values()].sort((left, right) => {
-      const severityDiff = severityRank(right.severity) - severityRank(left.severity);
+      const severityDiff = severityRankWithUnknown(right.cvss_severity) - severityRankWithUnknown(left.cvss_severity);
+
+      if (severityDiff !== 0) {
+        return severityDiff;
+      }
+
+      const leftScore = Number.isFinite(left.cvss_score) ? left.cvss_score : -1;
+      const rightScore = Number.isFinite(right.cvss_score) ? right.cvss_score : -1;
+
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore;
+      }
+
+      const leftPort = Number.isInteger(left.port) ? left.port : Number.POSITIVE_INFINITY;
+      const rightPort = Number.isInteger(right.port) ? right.port : Number.POSITIVE_INFINITY;
+
+      if (leftPort !== rightPort) {
+        return leftPort - rightPort;
+      }
+
+      return String(left.name || '').localeCompare(String(right.name || ''));
+    });
+  }, [rawVulnerabilityRows]);
+  const applicationRows = useMemo(() => {
+    const entries = Array.isArray(deviceMetadata.applications) ? deviceMetadata.applications : [];
+    const aggregated = new Map();
+    const upsert = ({ cpe, severity, cvssScore }) => {
+      const normalizedCpe = normalizeApplicationCpe(cpe);
+
+      if (!normalizedCpe) {
+        return;
+      }
+
+      const normalizedSeverity = normalizeDisplaySeverity(severity);
+      const normalizedScore = Number.isFinite(cvssScore) && cvssScore > 0 ? cvssScore : null;
+      const key = normalizedCpe.toLowerCase();
+      const existing = aggregated.get(key);
+
+      if (!existing) {
+        aggregated.set(key, {
+          cpe: normalizedCpe,
+          severity: normalizedSeverity,
+          cvss_score: normalizedScore,
+        });
+        return;
+      }
+
+      if (severityRankWithUnknown(normalizedSeverity) > severityRankWithUnknown(existing.severity)) {
+        existing.severity = normalizedSeverity;
+      }
+
+      if (
+        Number.isFinite(normalizedScore)
+        && (!Number.isFinite(existing.cvss_score) || normalizedScore > existing.cvss_score)
+      ) {
+        existing.cvss_score = normalizedScore;
+      }
+    };
+
+    entries.forEach((entry) => {
+      if (typeof entry === 'string') {
+        upsert({
+          cpe: entry,
+          severity: null,
+          cvssScore: null,
+        });
+        return;
+      }
+
+      upsert({
+        cpe: entry?.cpe || entry?.value,
+        severity: entry?.severity || null,
+        cvssScore: toFiniteNumber(entry?.cvss_score),
+      });
+    });
+
+    rawVulnerabilityRows.forEach((row) => {
+      const cpes = extractApplicationCpesFromValue(row?.name, row?.description);
+      const severity = row?.cvss_severity || row?.severity || null;
+      const cvssScore = toFiniteNumber(row?.cvss_score);
+
+      cpes.forEach((cpe) => {
+        upsert({
+          cpe,
+          severity,
+          cvssScore,
+        });
+      });
+    });
+
+    return [...aggregated.values()].sort((left, right) => {
+      const severityDiff = severityRankWithUnknown(right.severity) - severityRankWithUnknown(left.severity);
 
       if (severityDiff !== 0) {
         return severityDiff;
@@ -621,7 +827,7 @@ export default function DeviceDetail() {
 
       return left.cpe.localeCompare(right.cpe);
     });
-  }, [deviceMetadata.applications]);
+  }, [deviceMetadata.applications, rawVulnerabilityRows]);
   const tlsCertificateRows = useMemo(
     () => (Array.isArray(device?.tls_certificates) ? device.tls_certificates : []),
     [device],
@@ -640,99 +846,67 @@ export default function DeviceDetail() {
   }, [vulnerabilityRows.length]);
 
   const cveRows = useMemo(() => {
-    const rows = [];
+    const aggregated = new Map();
+
     rawVulnerabilityRows.forEach((row) => {
       const cves = toCveArray(row);
-      const score = Number.parseFloat(row.cvss_score);
-      const severity = row.cvss_severity || row.severity || 'Low';
-      const nvtName = String(row.name || '').trim() || '-';
 
-      cves.forEach((cve) => {
-        rows.push({
-          cve,
-          nvt_name: nvtName,
-          highest_severity: severity,
-          top_cvss: Number.isFinite(score) ? score : null,
-        });
-      });
-    });
-
-    hostLogRows.forEach((entry) => {
-      if (!entry || typeof entry !== 'object') {
+      if (cves.length === 0) {
         return;
       }
 
-      const cves = extractCvesFromValue(entry.cves || entry.cve);
-      const severity = String(entry.severity || entry.threat || 'Low');
-      const nvtName = String(entry.name || entry.finding_name || 'Informational finding').trim();
-      const score = Number.parseFloat(entry.cvss_score);
+      const nvtName = normalizeVulnerabilityName(row);
 
-      cves.forEach((cve) => {
-        rows.push({
-          cve,
-          nvt_name: nvtName || 'Informational finding',
+      if (!nvtName) {
+        return;
+      }
+
+      const nvtOid = String(row?.nvt_oid || '').trim().toLowerCase();
+      const key = nvtOid || nvtName.toLowerCase();
+      const severity = normalizeDisplaySeverity(row?.cvss_severity || row?.severity);
+      const score = toFiniteNumber(row?.cvss_score);
+      const existing = aggregated.get(key);
+
+      if (!existing) {
+        aggregated.set(key, {
+          row_key: key,
+          nvt_name: nvtName,
           highest_severity: severity,
-          top_cvss: Number.isFinite(score) ? score : null,
+          top_cvss: score,
+          cves: new Set(cves),
+          latest_scan_id: Number.parseInt(row?.scan_id, 10) || 0,
         });
-      });
+        return;
+      }
+
+      cves.forEach((cve) => existing.cves.add(cve));
+
+      if (severityRankWithUnknown(severity) > severityRankWithUnknown(existing.highest_severity)) {
+        existing.highest_severity = severity;
+      }
+
+      if (Number.isFinite(score) && (!Number.isFinite(existing.top_cvss) || score > existing.top_cvss)) {
+        existing.top_cvss = score;
+      }
+
+      const nextScanId = Number.parseInt(row?.scan_id, 10) || 0;
+
+      if (nextScanId >= existing.latest_scan_id) {
+        existing.nvt_name = nvtName;
+        existing.latest_scan_id = nextScanId;
+      }
     });
 
-    const hostDetailCves = extractCvesFromValue(
-      JSON.stringify(toObject(deviceMetadata.greenbone_host_details)),
-    );
-
-    hostDetailCves.forEach((cve) => {
-      rows.push({
-        cve,
-        nvt_name: 'Host detail evidence',
-        highest_severity: 'Low',
-        top_cvss: null,
-      });
-    });
-
-    portRows.forEach((portRow) => {
-      const metadata = toObject(portRow?.metadata);
-      const candidates = [
-        ...(Array.isArray(metadata.greenbone_findings) ? metadata.greenbone_findings : []),
-        ...(Array.isArray(metadata.greenbone_logs) ? metadata.greenbone_logs : []),
-        ...(Array.isArray(metadata.vulnerability_refs) ? metadata.vulnerability_refs : []),
-      ];
-
-      candidates.forEach((entry) => {
-        if (!entry || typeof entry !== 'object') {
-          return;
-        }
-
-        const cves = extractCvesFromValue(entry.cves || entry.cve_list || entry.cve);
-        const severity = String(entry.cvss_severity || entry.severity || entry.threat || 'Low');
-        const nvtName = String(entry.name || entry.finding_name || portRow.service || 'Port finding').trim();
-        const score = Number.parseFloat(entry.cvss_score);
-
-        cves.forEach((cve) => {
-          rows.push({
-            cve,
-            nvt_name: nvtName || 'Port finding',
-            highest_severity: severity,
-            top_cvss: Number.isFinite(score) ? score : null,
-          });
-        });
-      });
-    });
-
-    const occurrenceMap = new Map();
-
-    rows.forEach((row) => {
-      occurrenceMap.set(row.cve, (occurrenceMap.get(row.cve) || 0) + 1);
-    });
-
-    return rows
-      .map((row, index) => ({
-        ...row,
-        findings: occurrenceMap.get(row.cve) || 1,
-        row_key: `${row.cve}-${index}`,
+    return [...aggregated.values()]
+      .map((row) => ({
+        row_key: row.row_key,
+        nvt_name: row.nvt_name,
+        highest_severity: row.highest_severity,
+        top_cvss: row.top_cvss,
+        cves: [...row.cves].sort((left, right) => left.localeCompare(right)),
       }))
       .sort((left, right) => {
-        const severityDiff = severityRank(right.highest_severity) - severityRank(left.highest_severity);
+        const severityDiff = severityRankWithUnknown(right.highest_severity) - severityRankWithUnknown(left.highest_severity);
 
         if (severityDiff !== 0) {
           return severityDiff;
@@ -745,9 +919,9 @@ export default function DeviceDetail() {
           return rightScore - leftScore;
         }
 
-        return left.cve.localeCompare(right.cve);
+        return left.nvt_name.localeCompare(right.nvt_name);
       });
-  }, [deviceMetadata.greenbone_host_details, hostLogRows, portRows, rawVulnerabilityRows]);
+  }, [rawVulnerabilityRows]);
 
   const deviceSnapshot = useMemo(() => {
     const openPorts = portRows.filter((row) => String(row.state || '').toLowerCase() === 'open');
@@ -866,18 +1040,17 @@ export default function DeviceDetail() {
       {
         key: 'severity',
         header: 'Severity',
-        render: (row) => <span className={`severity-chip ${severityClass(row.severity)}`}>{row.severity}</span>,
+        render: (row) => (
+          row.severity === 'N/A'
+            ? 'N/A'
+            : <span className={`severity-chip ${severityClass(row.severity)}`}>{row.severity}</span>
+        ),
       },
       {
         key: 'cvss_score',
         header: 'Top CVSS',
         align: 'right',
         render: (row) => (Number.isFinite(row.cvss_score) ? row.cvss_score.toFixed(1) : '-'),
-      },
-      {
-        key: 'findings',
-        header: 'Findings',
-        align: 'right',
       },
     ],
     [],
@@ -886,12 +1059,19 @@ export default function DeviceDetail() {
   const cveColumns = useMemo(
     () => [
       {
-        key: 'cve',
-        header: 'CVE',
+        key: 'cves',
+        header: 'CVEs',
         render: (row) => (
-          <a href={`https://nvd.nist.gov/vuln/detail/${row.cve}`} target="_blank" rel="noreferrer">
-            {row.cve}
-          </a>
+          <span>
+            {row.cves.map((cve, index) => (
+              <Fragment key={`${row.row_key}-${cve}`}>
+                {index > 0 && ', '}
+                <a href={`https://nvd.nist.gov/vuln/detail/${cve}`} target="_blank" rel="noreferrer">
+                  {cve}
+                </a>
+              </Fragment>
+            ))}
+          </span>
         ),
       },
       {
@@ -903,9 +1083,13 @@ export default function DeviceDetail() {
         key: 'highest_severity',
         header: 'Highest Severity',
         render: (row) => (
-          <span className={`severity-chip ${severityClass(row.highest_severity)}`}>
-            {row.highest_severity}
-          </span>
+          row.highest_severity === 'N/A'
+            ? 'N/A'
+            : (
+              <span className={`severity-chip ${severityClass(row.highest_severity)}`}>
+                {row.highest_severity}
+              </span>
+            )
         ),
       },
       {
@@ -913,11 +1097,6 @@ export default function DeviceDetail() {
         header: 'Top CVSS',
         align: 'right',
         render: (row) => (Number.isFinite(row.top_cvss) ? row.top_cvss.toFixed(1) : '-'),
-      },
-      {
-        key: 'findings',
-        header: 'Occurrences/Findings',
-        align: 'right',
       },
     ],
     [],
@@ -1326,7 +1505,19 @@ export default function DeviceDetail() {
                         {vulnStatusLoaded && vulnStatusMessage && (
                           <p className="warning-text vuln-status-inline">{vulnStatusMessage}</p>
                         )}
-                        {completedGreenboneScans.length > 0 && (
+                        <div className="field-stack vuln-port-field">
+                          <label htmlFor="history-refresh-mode">Refresh Mode</label>
+                          <select
+                            id="history-refresh-mode"
+                            value={historyRefreshMode}
+                            disabled={historyRefreshing || vulnTriggering || loading || !device}
+                            onChange={(event) => setHistoryRefreshMode(event.target.value)}
+                          >
+                            <option value="selected">Single Scan (Replace)</option>
+                            <option value="all">All Scans (Deduped)</option>
+                          </select>
+                        </div>
+                        {completedGreenboneScans.length > 0 && historyRefreshMode === 'selected' && (
                           <div className="field-stack vuln-port-field">
                             <label htmlFor="history-scan-id">Refresh Scan</label>
                             <select
@@ -1353,11 +1544,16 @@ export default function DeviceDetail() {
                             || vulnTriggering
                             || loading
                             || !device
-                            || (completedGreenboneScans.length > 0 && !historyScanId)
+                            || completedGreenboneScans.length === 0
+                            || (historyRefreshMode === 'selected' && !historyScanId)
                           }
                           onClick={refreshFromGreenboneHistory}
                         >
-                          {historyRefreshing ? 'Refreshing...' : 'Refresh From Greenbone History'}
+                          {historyRefreshing
+                            ? 'Refreshing...'
+                            : (historyRefreshMode === 'all'
+                              ? 'Refresh From All Greenbone Scans'
+                              : 'Refresh From Selected Greenbone Scan')}
                         </button>
                       </div>
                     </section>
@@ -1622,7 +1818,7 @@ export default function DeviceDetail() {
 
               {activeTab === 'applications' && (
                 <>
-                  <p className="muted">Software inventory from Greenbone host-detail CPE evidence.</p>
+                  <p className="muted">Software inventory from Greenbone CPE evidence, deduplicated across imports.</p>
                   <DataTable
                     columns={applicationsColumns}
                     rows={applicationRows}
@@ -1636,7 +1832,7 @@ export default function DeviceDetail() {
 
               {activeTab === 'cves' && (
                 <>
-                  <p className="muted">CVE occurrences across vulnerability and informational finding evidence.</p>
+                  <p className="muted">Greenbone CVE evidence grouped by NVT, without duplicate rows.</p>
                   <DataTable
                     columns={cveColumns}
                     rows={cveRows}
