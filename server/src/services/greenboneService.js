@@ -552,48 +552,40 @@ function parseSshKeyFromText(value) {
   };
 }
 
-function extractOsCandidate(...values) {
-  const text = values
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join('\n');
+function extractOsCandidate(detailName, detailValue) {
+  const normalizedName = normalizeDetailKey(detailName);
+  const value = normalizeText(detailValue);
 
-  if (!text) {
+  if (!value) {
     return null;
   }
 
-  const pairs = parseLabelValuePairs(text);
-  const explicit = normalizeText(
-    pairs.best_os_cpe
-    || pairs.operating_system
-    || pairs.remote_operating_system
-    || pairs.os
-    || pairs.cpe,
-  );
+  const osCpeMatch = value.match(/^(cpe:\/o:[^\s,;]+)/i);
 
-  if (explicit && !/unknown|not available|could not/i.test(explicit)) {
-    return explicit;
+  if (osCpeMatch) {
+    return osCpeMatch[1];
   }
 
-  const cpeMatch = text.match(/\b(cpe:\/[a-z]:[^\s,;]+)/i);
-
-  if (cpeMatch) {
-    return cpeMatch[1];
-  }
-
-  const lineMatch = text.match(/(?:operating system|remote os|os guess)\s*(?:is|:)\s*([^\n]+)/i);
-
-  if (!lineMatch) {
+  if (normalizedName !== 'best_os_txt') {
     return null;
   }
 
-  const candidate = normalizeText(lineMatch[1]);
-
-  if (!candidate || /unknown|not available|could not/i.test(candidate)) {
+  if (/unknown|not available|could not/i.test(value)) {
     return null;
   }
 
-  return candidate;
+  return value;
+}
+
+function extractApplicationCpe(detailValue) {
+  const value = normalizeText(detailValue);
+
+  if (!value) {
+    return null;
+  }
+
+  const applicationCpeMatch = value.match(/^(cpe:\/a:[^\s,;]+)/i);
+  return applicationCpeMatch ? applicationCpeMatch[1] : null;
 }
 
 function isInformationalFinding(threatValue, scoreValue) {
@@ -1731,25 +1723,6 @@ function parseReportData(rootNode) {
         });
     }
 
-    const osCandidate = extractOsCandidate(
-      name,
-      description,
-      extractText(result.nvt?.tags),
-      extractText(result.nvt?.summary),
-    );
-
-    if (host && osCandidate) {
-      upsertOsDetection({
-        host,
-        name: osCandidate,
-        confidence: informational ? 0.98 : 0.9,
-        evidence: {
-          finding_name: name,
-          nvt_oid: nvtOid,
-        },
-      });
-    }
-
     if (host && looksLikeTlsContext(name, description)) {
       const cert = parseCertificateFromText(`${name}\n${description}`);
 
@@ -1858,6 +1831,14 @@ function parseReportData(rootNode) {
 
       if (!detailValue) {
         return;
+      }
+
+      const applicationCpe = extractApplicationCpe(detailValue);
+
+      if (applicationCpe) {
+        upsertHostMetadata(host, {
+          applications: [applicationCpe],
+        });
       }
 
       upsertHostMetadata(host, {

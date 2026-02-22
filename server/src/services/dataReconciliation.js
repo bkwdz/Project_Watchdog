@@ -126,16 +126,6 @@ function mergeJsonValues(left, right) {
   return right === undefined ? left : right;
 }
 
-function looksGenericNmapOsGuess(value) {
-  const normalized = String(value || '').toLowerCase();
-
-  if (!normalized) {
-    return false;
-  }
-
-  return /(unknown|generic|linux\s+[2-6]\.|kernel|unix-like)/i.test(normalized);
-}
-
 function normalizeOsDetection(entry) {
   if (!entry || typeof entry !== 'object') {
     return null;
@@ -148,16 +138,10 @@ function normalizeOsDetection(entry) {
     return null;
   }
 
-  let confidence = sourceConfidence(source, entry.confidence);
-
-  if (source === 'nmap' && looksGenericNmapOsGuess(name)) {
-    confidence = Math.min(confidence, 0.45);
-  }
-
   return {
     name,
     source,
-    confidence,
+    confidence: clampConfidence(entry.confidence, null),
     evidence: entry.evidence && typeof entry.evidence === 'object' ? entry.evidence : null,
     detected_at: normalizeText(entry.detected_at) || new Date().toISOString(),
   };
@@ -169,12 +153,6 @@ function sortOsDetections(entries) {
 
     if (priorityDiff !== 0) {
       return priorityDiff;
-    }
-
-    const confidenceDiff = (right.confidence || 0) - (left.confidence || 0);
-
-    if (confidenceDiff !== 0) {
-      return confidenceDiff;
     }
 
     return String(right.detected_at || '').localeCompare(String(left.detected_at || ''));
@@ -214,10 +192,7 @@ function selectBestOs(detections, currentDevice = null) {
     candidates.push({
       name: currentDevice.os_guess,
       source: normalizeSource(currentDevice.os_guess_source),
-      confidence: sourceConfidence(
-        currentDevice.os_guess_source,
-        currentDevice.os_guess_confidence,
-      ),
+      confidence: clampConfidence(currentDevice.os_guess_confidence, null),
       detected_at: new Date().toISOString(),
       evidence: null,
     });

@@ -28,6 +28,7 @@ const DEVICE_TABS = [
   { key: 'scan-console', label: 'Scan Console' },
   { key: 'vulnerabilities', label: 'Vulnerabilities' },
   { key: 'ports', label: 'Ports & Services' },
+  { key: 'applications', label: 'Applications' },
   { key: 'certificates', label: 'Certificates & Keys' },
   { key: 'cves', label: 'CVEs' },
 ];
@@ -462,11 +463,26 @@ export default function DeviceDetail() {
       });
   }, [device?.ip_address, scans]);
 
+  const deviceMetadata = useMemo(() => toObject(device?.metadata), [device]);
   const portRows = useMemo(() => (Array.isArray(device?.ports) ? device.ports : []), [device]);
-  const vulnerabilityRows = useMemo(
-    () => (Array.isArray(device?.vulnerabilities) ? device.vulnerabilities.filter((row) => !isInformationalFinding(row)) : []),
+  const rawVulnerabilityRows = useMemo(
+    () => (Array.isArray(device?.vulnerabilities) ? device.vulnerabilities : []),
     [device],
   );
+  const vulnerabilityRows = useMemo(
+    () => rawVulnerabilityRows.filter((row) => !isInformationalFinding(row)),
+    [rawVulnerabilityRows],
+  );
+  const applicationRows = useMemo(() => {
+    const entries = Array.isArray(deviceMetadata.applications) ? deviceMetadata.applications : [];
+    const unique = [...new Set(
+      entries
+        .map((entry) => String(entry || '').trim())
+        .filter(Boolean),
+    )];
+
+    return unique.map((cpe) => ({ cpe }));
+  }, [deviceMetadata.applications]);
   const tlsCertificateRows = useMemo(
     () => (Array.isArray(device?.tls_certificates) ? device.tls_certificates : []),
     [device],
@@ -487,20 +503,21 @@ export default function DeviceDetail() {
   const cveRows = useMemo(() => {
     const map = new Map();
 
-    vulnerabilityRows.forEach((row) => {
+    rawVulnerabilityRows.forEach((row) => {
       const cves = toCveArray(row);
 
       cves.forEach((cve) => {
         const score = Number.parseFloat(row.cvss_score);
         const severity = row.cvss_severity || row.severity || 'Low';
+        const nvtName = String(row.name || '').trim();
         const existing = map.get(cve);
 
         if (!existing) {
           map.set(cve, {
             cve,
-            severity,
-            cvss_score: Number.isFinite(score) ? score : null,
-            ports: row.port != null ? [row.port] : [],
+            nvt_names: nvtName ? [nvtName] : [],
+            highest_severity: severity,
+            top_cvss: Number.isFinite(score) ? score : null,
             findings: 1,
           });
           return;
@@ -508,42 +525,42 @@ export default function DeviceDetail() {
 
         existing.findings += 1;
 
-        if (row.port != null && !existing.ports.includes(row.port)) {
-          existing.ports.push(row.port);
+        if (nvtName && !existing.nvt_names.includes(nvtName)) {
+          existing.nvt_names.push(nvtName);
         }
 
-        if (severityRank(severity) > severityRank(existing.severity)) {
-          existing.severity = severity;
+        if (severityRank(severity) > severityRank(existing.highest_severity)) {
+          existing.highest_severity = severity;
         }
 
-        if (Number.isFinite(score) && (!Number.isFinite(existing.cvss_score) || score > existing.cvss_score)) {
-          existing.cvss_score = score;
+        if (Number.isFinite(score) && (!Number.isFinite(existing.top_cvss) || score > existing.top_cvss)) {
+          existing.top_cvss = score;
         }
       });
     });
 
     return [...map.values()]
-      .map((row) => ({
-        ...row,
-        ports: row.ports.sort((left, right) => left - right),
-      }))
       .sort((left, right) => {
-        const severityDiff = severityRank(right.severity) - severityRank(left.severity);
+        const severityDiff = severityRank(right.highest_severity) - severityRank(left.highest_severity);
 
         if (severityDiff !== 0) {
           return severityDiff;
         }
 
-        const leftScore = Number.isFinite(left.cvss_score) ? left.cvss_score : -1;
-        const rightScore = Number.isFinite(right.cvss_score) ? right.cvss_score : -1;
+        const leftScore = Number.isFinite(left.top_cvss) ? left.top_cvss : -1;
+        const rightScore = Number.isFinite(right.top_cvss) ? right.top_cvss : -1;
 
         if (rightScore !== leftScore) {
           return rightScore - leftScore;
         }
 
+        if (right.findings !== left.findings) {
+          return right.findings - left.findings;
+        }
+
         return left.cve.localeCompare(right.cve);
       });
-  }, [vulnerabilityRows]);
+  }, [rawVulnerabilityRows]);
 
   const deviceSnapshot = useMemo(() => {
     const openPorts = portRows.filter((row) => String(row.state || '').toLowerCase() === 'open');
@@ -653,6 +670,16 @@ export default function DeviceDetail() {
     [],
   );
 
+  const applicationsColumns = useMemo(
+    () => [
+      {
+        key: 'cpe',
+        header: 'Application CPE',
+      },
+    ],
+    [],
+  );
+
   const cveColumns = useMemo(
     () => [
       {
@@ -665,24 +692,28 @@ export default function DeviceDetail() {
         ),
       },
       {
-        key: 'severity',
-        header: 'Highest Severity',
-        render: (row) => <span className={`severity-chip ${severityClass(row.severity)}`}>{row.severity}</span>,
+        key: 'nvt_names',
+        header: 'NVT Name',
+        render: (row) => (Array.isArray(row.nvt_names) && row.nvt_names.length > 0 ? row.nvt_names.join(', ') : '-'),
       },
       {
-        key: 'cvss_score',
+        key: 'highest_severity',
+        header: 'Highest Severity',
+        render: (row) => (
+          <span className={`severity-chip ${severityClass(row.highest_severity)}`}>
+            {row.highest_severity}
+          </span>
+        ),
+      },
+      {
+        key: 'top_cvss',
         header: 'Top CVSS',
         align: 'right',
-        render: (row) => (Number.isFinite(row.cvss_score) ? row.cvss_score.toFixed(1) : '-'),
-      },
-      {
-        key: 'ports',
-        header: 'Ports',
-        render: (row) => (row.ports.length > 0 ? row.ports.join(', ') : '-'),
+        render: (row) => (Number.isFinite(row.top_cvss) ? row.top_cvss.toFixed(1) : '-'),
       },
       {
         key: 'findings',
-        header: 'Finding Count',
+        header: 'Occurrences/Findings',
         align: 'right',
       },
     ],
@@ -1345,9 +1376,23 @@ export default function DeviceDetail() {
                 </section>
               )}
 
+              {activeTab === 'applications' && (
+                <>
+                  <p className="muted">Software inventory from Greenbone host-detail CPE evidence.</p>
+                  <DataTable
+                    columns={applicationsColumns}
+                    rows={applicationRows}
+                    rowKey="cpe"
+                    emptyMessage="No application CPEs captured for this host."
+                    wrapperClassName="table-wrapper-compact"
+                    tableClassName="ui-table-compact"
+                  />
+                </>
+              )}
+
               {activeTab === 'cves' && (
                 <>
-                  <p className="muted">Deduplicated CVEs with direct NVD links.</p>
+                  <p className="muted">Deduplicated CVEs across raw findings, including informational evidence.</p>
                   <DataTable
                     columns={cveColumns}
                     rows={cveRows}

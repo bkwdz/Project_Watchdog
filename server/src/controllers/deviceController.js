@@ -99,11 +99,34 @@ exports.summary = async (req, res, next) => {
       `,
     );
 
+    const topRiskyDevicesResult = await query(
+      `
+        SELECT
+          d.id,
+          d.ip_address,
+          COALESCE(NULLIF(d.display_name, ''), NULLIF(d.hostname, ''), d.ip_address::text) AS device_name,
+          d.os_guess AS os,
+          COUNT(*) FILTER (
+            WHERE LOWER(COALESCE(v.cvss_severity, v.severity)) = 'critical'
+          )::int AS critical_vulns,
+          COUNT(*) FILTER (
+            WHERE LOWER(COALESCE(v.cvss_severity, v.severity)) = 'high'
+          )::int AS high_vulns
+        FROM devices d
+        INNER JOIN vulnerabilities v ON v.device_id = d.id
+        WHERE LOWER(COALESCE(v.cvss_severity, v.severity)) IN ('critical', 'high')
+        GROUP BY d.id, d.ip_address, d.display_name, d.hostname, d.os_guess
+        ORDER BY critical_vulns DESC, high_vulns DESC, d.id ASC
+        LIMIT 10
+      `,
+    );
+
     return res.json({
       totals: totalsResult.rows[0],
       top_ports: topPortsResult.rows,
       top_services: topServicesResult.rows,
       active_scans: activeScansResult.rows,
+      top_risky_devices: topRiskyDevicesResult.rows,
     });
   } catch (err) {
     return next(err);

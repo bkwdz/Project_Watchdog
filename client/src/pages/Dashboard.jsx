@@ -10,16 +10,6 @@ import StatusBadge from '../components/StatusBadge';
 import useScansFeed from '../hooks/useScansFeed';
 import { formatDateTime } from '../utils/time';
 
-function toRecentScanRows(scans) {
-  return [...scans]
-    .sort((a, b) => {
-      const left = a.started_at ? new Date(a.started_at).getTime() : 0;
-      const right = b.started_at ? new Date(b.started_at).getTime() : 0;
-      return right - left || b.id - a.id;
-    })
-    .slice(0, 8);
-}
-
 export default function Dashboard() {
   const navigate = useNavigate();
   const [devices, setDevices] = useState([]);
@@ -147,11 +137,6 @@ export default function Dashboard() {
     [totals],
   );
 
-  const severityTotal = useMemo(
-    () => severityRows.reduce((sum, row) => sum + row.count, 0),
-    [severityRows],
-  );
-
   const activeScans = useMemo(() => {
     const rows = Array.isArray(summary?.active_scans) ? summary.active_scans : [];
 
@@ -174,41 +159,36 @@ export default function Dashboard() {
     [summary],
   );
 
-  const recentScans = useMemo(() => toRecentScanRows(scans), [scans]);
+  const topRiskyDevices = useMemo(
+    () => (Array.isArray(summary?.top_risky_devices) ? summary.top_risky_devices : []),
+    [summary],
+  );
 
-  const recentColumns = useMemo(
+  const topRiskyDeviceColumns = useMemo(
     () => [
-      { key: 'target', header: 'Target' },
-      { key: 'scan_type', header: 'Type' },
       {
-        key: 'status',
-        header: 'Status',
-        render: (scan) => <StatusBadge status={scan.status} />,
+        key: 'device_name',
+        header: 'Device Name',
+        render: (row) => row.device_name || '-',
+      },
+      { key: 'ip_address', header: 'IP' },
+      {
+        key: 'os',
+        header: 'OS',
+        render: (row) => row.os || '-',
       },
       {
-        key: 'started_at',
-        header: 'Started',
-        render: (scan) => formatDateTime(scan.started_at),
-      },
-      {
-        key: 'view',
-        header: 'View',
+        key: 'critical_vulns',
+        header: 'Critical Vulns',
         align: 'right',
-        render: (scan) => (
-          <button
-            type="button"
-            className="small-button"
-            onClick={(event) => {
-              event.stopPropagation();
-              navigate(`/scans/${scan.id}`);
-            }}
-          >
-            View
-          </button>
-        ),
+      },
+      {
+        key: 'high_vulns',
+        header: 'High Vulns',
+        align: 'right',
       },
     ],
-    [navigate],
+    [],
   );
 
   return (
@@ -274,22 +254,6 @@ export default function Dashboard() {
       <section className="dashboard-split-grid">
         <Card title="Vulnerability Posture" subtitle="Distribution across discovered findings.">
           <div className="vuln-posture-grid">
-            <div className="severity-bars">
-              {severityRows.map((row) => {
-                const width = severityTotal > 0 ? Math.round((row.count / severityTotal) * 100) : 0;
-
-                return (
-                  <div key={row.key} className="severity-bar-row">
-                    <span className="severity-name">{row.label}</span>
-                    <div className="severity-bar-track">
-                      <div className={`severity-bar-fill severity-${row.key}`} style={{ width: `${width}%` }} />
-                    </div>
-                    <span className="severity-count">{row.count}</span>
-                  </div>
-                );
-              })}
-            </div>
-
             <PieChart title="Severity" segments={severityRows.map((row) => ({ ...row, value: row.count }))} />
           </div>
         </Card>
@@ -348,10 +312,15 @@ export default function Dashboard() {
       </section>
 
       <Card
-        title="Recent Scans"
-        subtitle={hasActiveScans ? 'Latest scan activity (auto-refresh enabled).' : 'Latest completed and historical scans.'}
+        title="Top Risky Devices"
+        subtitle="Hosts with the highest critical/high vulnerability counts."
       >
-        <DataTable columns={recentColumns} rows={recentScans} emptyMessage="No scans found yet." />
+        <DataTable
+          columns={topRiskyDeviceColumns}
+          rows={topRiskyDevices}
+          emptyMessage="No high-risk devices identified yet."
+          onRowClick={(row) => navigate(`/devices/${row.id}`)}
+        />
       </Card>
     </div>
   );
