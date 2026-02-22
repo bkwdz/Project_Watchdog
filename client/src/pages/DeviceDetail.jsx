@@ -157,23 +157,42 @@ function normalizeApplicationCpe(value) {
   return normalized;
 }
 
-function extractApplicationCpesFromValue(...values) {
-  const matches = values
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .join('\n')
-    .match(/(?:cpe:\/a:[^\s,;|)\]]+|\/a:[^\s,;|)\]]+)/gi) || [];
-  const deduped = new Set();
+function parseApplicationCpeIdentity(value) {
+  const cpe = normalizeApplicationCpe(value);
 
-  matches.forEach((match) => {
-    const normalized = normalizeApplicationCpe(match.startsWith('/a:') ? `cpe:${match}` : match);
+  if (!cpe) {
+    return null;
+  }
 
-    if (normalized) {
-      deduped.add(normalized);
+  const segments = cpe.split(':');
+  const vendor = segments[2] || '';
+  const product = segments[3] || '';
+  const version = segments[4] || '';
+  const hasSpecificVersion = Boolean(version && version !== '*' && version !== '-');
+
+  if (!vendor || !product) {
+    return null;
+  }
+
+  return {
+    cpe,
+    baseKey: `cpe:/a:${vendor}:${product}`,
+    hasSpecificVersion,
+  };
+}
+
+function formatApplicationSeverity(score, label) {
+  const normalizedLabel = normalizeDisplaySeverity(label);
+
+  if (Number.isFinite(score) && score > 0) {
+    if (normalizedLabel !== 'N/A') {
+      return `${score.toFixed(1)} (${normalizedLabel})`;
     }
-  });
 
-  return [...deduped];
+    return score.toFixed(1);
+  }
+
+  return 'N/A';
 }
 
 function normalizeDisplaySeverity(value) {
@@ -275,6 +294,7 @@ export default function DeviceDetail() {
   const [historyRefreshing, setHistoryRefreshing] = useState(false);
   const [historyScanId, setHistoryScanId] = useState('');
   const [historyRefreshMode, setHistoryRefreshMode] = useState('selected');
+  const [lastRefreshDetails, setLastRefreshDetails] = useState(null);
   const [useCredentials, setUseCredentials] = useState(false);
   const [credentialMode, setCredentialMode] = useState('existing');
   const [credentialType, setCredentialType] = useState('ssh');
@@ -572,6 +592,15 @@ export default function DeviceDetail() {
             : (historyScanId ? Number(historyScanId) : null),
         },
       );
+      setLastRefreshDetails({
+        refreshed_at: new Date().toISOString(),
+        mode: result?.mode || historyRefreshMode,
+        scan_id: result?.scan_id || null,
+        external_task_id: result?.external_task_id || null,
+        report_id: result?.report_id || null,
+        completed_at: result?.completed_at || null,
+        reports_imported: Array.isArray(result?.reports_imported) ? result.reports_imported : [],
+      });
       await loadDevice();
       await loadScans();
       pushToast(
@@ -747,36 +776,42 @@ export default function DeviceDetail() {
   const applicationRows = useMemo(() => {
     const entries = Array.isArray(deviceMetadata.applications) ? deviceMetadata.applications : [];
     const aggregated = new Map();
-    const upsert = ({ cpe, severity, cvssScore }) => {
-      const normalizedCpe = normalizeApplicationCpe(cpe);
+    const upsert = ({ cpe, severityScore, severityLabel }) => {
+      const identity = parseApplicationCpeIdentity(cpe);
 
-      if (!normalizedCpe) {
+      if (!identity) {
         return;
       }
 
-      const normalizedSeverity = normalizeDisplaySeverity(severity);
-      const normalizedScore = Number.isFinite(cvssScore) && cvssScore > 0 ? cvssScore : null;
-      const key = normalizedCpe.toLowerCase();
+      const normalizedScore = Number.isFinite(severityScore) && severityScore > 0 ? severityScore : null;
+      const normalizedLabel = Number.isFinite(normalizedScore)
+        ? normalizeDisplaySeverity(severityLabel)
+        : 'N/A';
+      const key = identity.cpe.toLowerCase();
       const existing = aggregated.get(key);
 
       if (!existing) {
         aggregated.set(key, {
-          cpe: normalizedCpe,
-          severity: normalizedSeverity,
-          cvss_score: normalizedScore,
+          cpe: identity.cpe,
+          baseKey: identity.baseKey,
+          hasSpecificVersion: identity.hasSpecificVersion,
+          severity_score: normalizedScore,
+          severity_label: normalizedLabel,
+          severity_display: formatApplicationSeverity(normalizedScore, normalizedLabel),
         });
         return;
       }
 
-      if (severityRankWithUnknown(normalizedSeverity) > severityRankWithUnknown(existing.severity)) {
-        existing.severity = normalizedSeverity;
-      }
-
       if (
         Number.isFinite(normalizedScore)
-        && (!Number.isFinite(existing.cvss_score) || normalizedScore > existing.cvss_score)
+        && (!Number.isFinite(existing.severity_score) || normalizedScore > existing.severity_score)
       ) {
-        existing.cvss_score = normalizedScore;
+        existing.severity_score = normalizedScore;
+        existing.severity_label = normalizeDisplaySeverity(severityLabel);
+        existing.severity_display = formatApplicationSeverity(
+          existing.severity_score,
+          existing.severity_label,
+        );
       }
     };
 
@@ -784,50 +819,53 @@ export default function DeviceDetail() {
       if (typeof entry === 'string') {
         upsert({
           cpe: entry,
-          severity: null,
-          cvssScore: null,
+          severityScore: null,
+          severityLabel: null,
         });
         return;
       }
 
       upsert({
         cpe: entry?.cpe || entry?.value,
-        severity: entry?.severity || null,
-        cvssScore: toFiniteNumber(entry?.cvss_score),
+        severityScore: toFiniteNumber(entry?.severity_score ?? entry?.cvss_score),
+        severityLabel: entry?.severity_label ?? entry?.severity ?? null,
       });
     });
 
-    rawVulnerabilityRows.forEach((row) => {
-      const cpes = extractApplicationCpesFromValue(row?.name, row?.description);
-      const severity = row?.cvss_severity || row?.severity || null;
-      const cvssScore = toFiniteNumber(row?.cvss_score);
+    const byBase = new Map();
+    aggregated.forEach((entry) => {
+      const current = byBase.get(entry.baseKey) || {
+        hasSpecificVersion: false,
+      };
 
-      cpes.forEach((cpe) => {
-        upsert({
-          cpe,
-          severity,
-          cvssScore,
-        });
+      if (entry.hasSpecificVersion) {
+        current.hasSpecificVersion = true;
+      }
+
+      byBase.set(entry.baseKey, current);
+    });
+
+    return [...aggregated.values()]
+      .filter((entry) => {
+        const group = byBase.get(entry.baseKey);
+
+        if (!group?.hasSpecificVersion) {
+          return true;
+        }
+
+        return entry.hasSpecificVersion;
+      })
+      .sort((left, right) => {
+        const leftScore = Number.isFinite(left.severity_score) ? left.severity_score : -1;
+        const rightScore = Number.isFinite(right.severity_score) ? right.severity_score : -1;
+
+        if (leftScore !== rightScore) {
+          return rightScore - leftScore;
+        }
+
+        return left.cpe.localeCompare(right.cpe);
       });
-    });
-
-    return [...aggregated.values()].sort((left, right) => {
-      const severityDiff = severityRankWithUnknown(right.severity) - severityRankWithUnknown(left.severity);
-
-      if (severityDiff !== 0) {
-        return severityDiff;
-      }
-
-      const leftScore = Number.isFinite(left.cvss_score) ? left.cvss_score : -1;
-      const rightScore = Number.isFinite(right.cvss_score) ? right.cvss_score : -1;
-
-      if (leftScore !== rightScore) {
-        return rightScore - leftScore;
-      }
-
-      return left.cpe.localeCompare(right.cpe);
-    });
-  }, [deviceMetadata.applications, rawVulnerabilityRows]);
+  }, [deviceMetadata.applications]);
   const tlsCertificateRows = useMemo(
     () => (Array.isArray(device?.tls_certificates) ? device.tls_certificates : []),
     [device],
@@ -1038,19 +1076,17 @@ export default function DeviceDetail() {
         header: 'Application CPE',
       },
       {
-        key: 'severity',
+        key: 'severity_display',
         header: 'Severity',
         render: (row) => (
-          row.severity === 'N/A'
+          row.severity_display === 'N/A'
             ? 'N/A'
-            : <span className={`severity-chip ${severityClass(row.severity)}`}>{row.severity}</span>
+            : (
+              <span className={`severity-chip ${severityClass(row.severity_label)}`}>
+                {row.severity_display}
+              </span>
+            )
         ),
-      },
-      {
-        key: 'cvss_score',
-        header: 'Top CVSS',
-        align: 'right',
-        render: (row) => (Number.isFinite(row.cvss_score) ? row.cvss_score.toFixed(1) : '-'),
       },
     ],
     [],
@@ -1555,6 +1591,29 @@ export default function DeviceDetail() {
                               ? 'Refresh From All Greenbone Scans'
                               : 'Refresh From Selected Greenbone Scan')}
                         </button>
+                        {lastRefreshDetails && (
+                          <div className="field-stack vuln-port-field">
+                            <label>Last Refresh Context</label>
+                            <p className="muted vuln-status-inline">
+                              Mode: {lastRefreshDetails.mode === 'all' ? 'All Scans (Deduped)' : 'Single Scan (Replace)'}
+                            </p>
+                            <p className="muted vuln-status-inline">
+                              Scan #{lastRefreshDetails.scan_id || '-'} | Report: {lastRefreshDetails.report_id || '-'}
+                            </p>
+                            <p className="muted vuln-status-inline">
+                              Task: {lastRefreshDetails.external_task_id || '-'}
+                            </p>
+                            <p className="muted vuln-status-inline">
+                              Completed: {formatDateTime(lastRefreshDetails.completed_at)}
+                            </p>
+                            <p className="muted vuln-status-inline">
+                              Refreshed: {formatDateTime(lastRefreshDetails.refreshed_at)}
+                            </p>
+                          </div>
+                        )}
+                        <p className="muted vuln-status-inline">
+                          Counts can differ between scans when discovered ports/services differ.
+                        </p>
                       </div>
                     </section>
                   </div>
@@ -1818,7 +1877,7 @@ export default function DeviceDetail() {
 
               {activeTab === 'applications' && (
                 <>
-                  <p className="muted">Software inventory from Greenbone CPE evidence, deduplicated across imports.</p>
+                  <p className="muted">Software inventory from Greenbone CPE evidence with Greenbone-style severity values.</p>
                   <DataTable
                     columns={applicationsColumns}
                     rows={applicationRows}

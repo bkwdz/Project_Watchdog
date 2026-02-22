@@ -228,22 +228,13 @@ function parseCveList(value) {
   return deduped;
 }
 
-function parseCve(value) {
-  return parseCveList(value)[0] || null;
-}
+function extractCvesFromValue(value) {
+  const set = new Set(parseCveList(value));
+  const matches = String(value || '').match(/\bCVE-\d{4}-\d{4,}\b/gi) || [];
 
-function extractCvesFromText(...values) {
-  const set = new Set();
-
-  values
-    .map((value) => String(value || ''))
-    .forEach((text) => {
-      const matches = text.match(/\bCVE-\d{4}-\d{4,}\b/gi) || [];
-
-      matches.forEach((match) => {
-        set.add(String(match).toUpperCase());
-      });
-    });
+  matches.forEach((match) => {
+    set.add(String(match).toUpperCase());
+  });
 
   return [...set];
 }
@@ -346,6 +337,79 @@ function parseNvtTags(value) {
     });
 
   return tags;
+}
+
+function parseNvtTagValues(value, tagName) {
+  const text = String(value || '').trim();
+  const normalizedTagName = String(tagName || '').trim().toLowerCase();
+
+  if (!text || !normalizedTagName) {
+    return [];
+  }
+
+  const values = [];
+
+  text
+    .split('|')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .forEach((entry) => {
+      const separator = entry.indexOf('=');
+
+      if (separator <= 0) {
+        return;
+      }
+
+      const key = entry.slice(0, separator).trim().toLowerCase();
+      const parsedValue = entry.slice(separator + 1).trim();
+
+      if (key === normalizedTagName && parsedValue) {
+        values.push(parsedValue);
+      }
+    });
+
+  return values;
+}
+
+function extractNvtReferenceCves(nvtNode) {
+  const refsNode = nvtNode?.refs;
+  const refCandidates = refsNode?.ref || refsNode;
+  const cves = new Set();
+
+  toArray(refCandidates).forEach((refNode) => {
+    if (!refNode) {
+      return;
+    }
+
+    const typeValues = [
+      refNode?.$?.type,
+      refNode?.$?.name,
+      refNode?.type,
+      refNode?.name,
+    ]
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+    const referenceValues = [
+      refNode?.$?.id,
+      refNode?.id,
+      refNode?.$?.value,
+      extractText(refNode),
+    ];
+    const hasCveReferenceValue = referenceValues.some((value) => extractCvesFromValue(value).length > 0);
+    const allowsCveParsing = hasCveReferenceValue
+      || typeValues.length === 0
+      || typeValues.some((value) => value.includes('cve'));
+
+    if (!allowsCveParsing) {
+      return;
+    }
+
+    referenceValues.forEach((value) => {
+      extractCvesFromValue(value).forEach((cve) => cves.add(cve));
+    });
+  });
+
+  return [...cves];
 }
 
 function parseQodValue(...values) {
@@ -1650,7 +1714,8 @@ function parseReportData(rootNode) {
     const hostText = extractText(result.host);
     const host = extractIpv4Candidate(hostText) || normalizeText(hostText);
     const portDescriptor = parsePortDescriptor(extractText(result.port));
-    const nvtTags = parseNvtTags(extractText(result.nvt?.tags));
+    const nvtTagsText = extractText(result.nvt?.tags);
+    const nvtTags = parseNvtTags(nvtTagsText);
     const cvssScore = parseCvssScore(
       extractText(result.severity),
       extractText(result.nvt?.cvss_base),
@@ -1686,23 +1751,29 @@ function parseReportData(rootNode) {
     const nvtOid = normalizeText(result?.nvt?.$?.oid) || null;
     const name = normalizeText(rawName);
     const displayName = name || (nvtOid ? `NVT ${nvtOid}` : null);
-    const explicitCves = parseCveList(
-      [extractText(result.nvt?.cve), extractText(result.cve), nvtTags.cve]
-        .filter(Boolean)
-        .join(','),
-    );
-    const inferredCves = extractCvesFromText(
-      rawName,
-      description,
-      extractText(result.nvt?.tags),
-      extractText(result.nvt?.summary),
-      nvtTags.summary,
-      nvtTags.insight,
-      nvtTags.impact,
-      nvtTags.solution,
-    );
-    const cveList = [...new Set([...explicitCves, ...inferredCves])];
+    const cveList = [...new Set([
+      ...extractNvtReferenceCves(result.nvt),
+      ...extractCvesFromValue(extractText(result.nvt?.cve)),
+      ...extractCvesFromValue(extractText(result.cve)),
+      ...parseNvtTagValues(nvtTagsText, 'cve').flatMap((value) => extractCvesFromValue(value)),
+      ...extractCvesFromValue(nvtTags.cve),
+    ])];
     const informational = isInformationalFinding(threatText, cvssScore);
+    const applicationSeverityScore = (
+      !informational
+      && Number.isFinite(cvssScore)
+      && cvssScore > 0
+    )
+      ? cvssScore
+      : null;
+    const applicationSeverityLabel = Number.isFinite(applicationSeverityScore)
+      ? (
+        normalizeSeverityLabel(threatText)
+        || severityFromScore(applicationSeverityScore)
+        || cvssSeverity
+        || null
+      )
+      : null;
     const appCpes = extractApplicationCpes(
       rawName,
       description,
@@ -1750,10 +1821,14 @@ function parseReportData(rootNode) {
           ? {
             applications: appCpes.map((cpe) => ({
               cpe,
-              severity: cvssSeverity,
-              cvss_score: Number.isFinite(cvssScore) ? cvssScore : null,
+              severity: applicationSeverityLabel,
+              cvss_score: applicationSeverityScore,
+              severity_score: applicationSeverityScore,
+              severity_label: applicationSeverityLabel,
               qod,
               finding_name: displayName,
+              nvt_name: displayName,
+              nvt_oid: nvtOid,
               source: 'greenbone',
             })),
           }
@@ -1917,7 +1992,7 @@ function parseReportData(rootNode) {
     vulnerabilities.push({
       host,
       port: portDescriptor.port,
-      cve: cveList[0] || parseCve(extractText(result.nvt?.cve) || extractText(result.cve)),
+      cve: cveList[0] || null,
       cve_list: cveList,
       nvt_oid: nvtOid,
       name: displayName,
@@ -1964,8 +2039,12 @@ function parseReportData(rootNode) {
               cpe: applicationCpe,
               severity: null,
               cvss_score: null,
+              severity_score: null,
+              severity_label: null,
               qod: null,
               finding_name: detailName || null,
+              nvt_name: null,
+              nvt_oid: null,
               source: detailSource || 'greenbone',
             },
           ],

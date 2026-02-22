@@ -1510,6 +1510,7 @@ exports.refreshDeviceFromGreenboneHistory = async (req, res, next) => {
           scan_id: scan.id,
           external_task_id: scan.external_task_id,
           report_id: reportData.reportId,
+          completed_at: scan.completed_at,
           vulnerabilities_imported: inserted,
         });
       }
@@ -1523,6 +1524,7 @@ exports.refreshDeviceFromGreenboneHistory = async (req, res, next) => {
         scan_id: latest.id,
         external_task_id: latest.external_task_id,
         report_id: importedReports[importedReports.length - 1]?.report_id || null,
+        completed_at: latest.completed_at || null,
         vulnerabilities_imported: insertedTotal,
         reports_imported: importedReports,
       });
