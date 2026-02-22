@@ -652,6 +652,22 @@ function buildTaskPreferencesXml(maxChecks, maxHosts) {
   `;
 }
 
+function buildTargetCredentialXml({
+  sshCredentialId,
+  smbCredentialId,
+  useLegacyCredentialTags = false,
+}) {
+  const sshTag = useLegacyCredentialTags ? 'ssh_lsc_credential' : 'ssh_credential';
+  const smbTag = useLegacyCredentialTags ? 'smb_lsc_credential' : 'smb_credential';
+
+  return [
+    sshCredentialId ? `<${sshTag} id="${xmlEscape(sshCredentialId)}" />` : '',
+    smbCredentialId ? `<${smbTag} id="${xmlEscape(smbCredentialId)}" />` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 function isValidPortToken(token) {
   const trimmed = String(token || '').trim();
 
@@ -928,7 +944,7 @@ async function resolveScannerId(socket, requestedId) {
 async function fetchCredentialTypeEntries(socket) {
   const response = await sendGmpCommand(
     socket,
-    '<get_credential_types details="1" ignore_pagination="1" />',
+    '<get_credential_types />',
   );
 
   const credentialTypes = collectNodesByKey(response.rootNode, 'credential_type', []);
@@ -939,6 +955,31 @@ async function fetchCredentialTypeEntries(socket) {
       name: extractText(credentialTypeNode?.name),
     }))
     .filter((entry) => entry.id);
+}
+
+function isUnsupportedCredentialTypeLookupError(error) {
+  if (!(error instanceof GreenboneServiceError)) {
+    return false;
+  }
+
+  if (error.code !== 'GREENBONE_GMP_ERROR') {
+    return false;
+  }
+
+  const statusText = extractGmpStatusText(error);
+  return statusText.includes('bogus command name');
+}
+
+function extractGmpStatusText(error) {
+  if (!(error instanceof GreenboneServiceError)) {
+    return '';
+  }
+
+  return String(error?.details?.status_text || '').toLowerCase();
+}
+
+function isBogusCommandNameError(error) {
+  return extractGmpStatusText(error).includes('bogus command name');
 }
 
 function normalizeCredentialKind(value) {
@@ -969,7 +1010,17 @@ function selectCredentialTypeId(entries, credentialType) {
 }
 
 async function getCredentialTypes() {
-  return withAuthenticatedSession(async (socket) => fetchCredentialTypeEntries(socket));
+  return withAuthenticatedSession(async (socket) => {
+    try {
+      return await fetchCredentialTypeEntries(socket);
+    } catch (error) {
+      if (isUnsupportedCredentialTypeLookupError(error)) {
+        return [];
+      }
+
+      throw error;
+    }
+  });
 }
 
 async function resolveCredentialTypeId(socket, credentialType) {
@@ -1969,12 +2020,6 @@ async function startScan(target, options = {}) {
     const resolvedMaxChecks = requestedMaxChecks ?? parseTaskConcurrencyValue(config.maxChecks);
     const resolvedMaxHosts = requestedMaxHosts ?? parseTaskConcurrencyValue(config.maxHosts);
     const taskPreferencesXml = buildTaskPreferencesXml(resolvedMaxChecks, resolvedMaxHosts);
-    const credentialXml = [
-      requestedSshCredentialId ? `<ssh_credential id="${xmlEscape(requestedSshCredentialId)}" />` : '',
-      requestedSmbCredentialId ? `<smb_credential id="${xmlEscape(requestedSmbCredentialId)}" />` : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
 
     if (!isValidGreenbonePortRange(resolvedPortRange)) {
       throw new GreenboneServiceError('Invalid Greenbone port range format', {
@@ -1984,10 +2029,14 @@ async function startScan(target, options = {}) {
       });
     }
 
-    let createTargetResponse;
+    const sendCreateTargetCommand = async (useLegacyCredentialTags = false) => {
+      const credentialXml = buildTargetCredentialXml({
+        sshCredentialId: requestedSshCredentialId,
+        smbCredentialId: requestedSmbCredentialId,
+        useLegacyCredentialTags,
+      });
 
-    try {
-      createTargetResponse = await sendGmpCommand(
+      return sendGmpCommand(
         socket,
         `
           <create_target>
@@ -1998,28 +2047,49 @@ async function startScan(target, options = {}) {
           </create_target>
         `,
       );
+    };
+
+    const hasRequestedCredentials = Boolean(requestedSshCredentialId || requestedSmbCredentialId);
+    let createTargetResponse = null;
+    let createTargetError = null;
+
+    try {
+      createTargetResponse = await sendCreateTargetCommand(false);
     } catch (error) {
-      const statusText = String(error?.details?.status_text || '').toLowerCase();
-      const referencesCredential = /credential|unknown id|not found|invalid/i.test(statusText);
+      createTargetError = error;
+
+      if (hasRequestedCredentials && isBogusCommandNameError(error)) {
+        try {
+          createTargetResponse = await sendCreateTargetCommand(true);
+          createTargetError = null;
+        } catch (legacyError) {
+          createTargetError = legacyError;
+        }
+      }
+    }
+
+    if (!createTargetResponse) {
+      const statusText = extractGmpStatusText(createTargetError);
+      const referencesCredential = /credential|unknown id|not found|invalid|unsupported/i.test(statusText);
 
       if (
-        (requestedSshCredentialId || requestedSmbCredentialId)
-        && error instanceof GreenboneServiceError
-        && error.code === 'GREENBONE_GMP_ERROR'
+        hasRequestedCredentials
+        && createTargetError instanceof GreenboneServiceError
+        && createTargetError.code === 'GREENBONE_GMP_ERROR'
         && referencesCredential
       ) {
         throw new GreenboneServiceError('Vulnerability credential was rejected by the scanner', {
           statusCode: 400,
           code: 'GREENBONE_CREDENTIAL_REJECTED',
           details: {
-            status_text: error?.details?.status_text || null,
+            status_text: createTargetError?.details?.status_text || null,
             ssh_credential_id: requestedSshCredentialId,
             smb_credential_id: requestedSmbCredentialId,
           },
         });
       }
 
-      throw error;
+      throw createTargetError;
     }
 
     const targetId = extractResponseId(createTargetResponse);
@@ -2182,30 +2252,76 @@ async function createCredential({
   }
 
   return withAuthenticatedSession(async (socket) => {
-    const credentialTypeId = await resolveCredentialTypeId(socket, normalizedType);
-    const createCredentialResponse = await sendGmpCommand(
-      socket,
+    const commands = [
       `
         <create_credential>
           <name>${xmlEscape(safeName)}</name>
-          <credential_type id="${xmlEscape(credentialTypeId)}" />
+          <type>up</type>
           <login>${xmlEscape(safeUsername)}</login>
           <password>${xmlEscape(safePassword)}</password>
         </create_credential>
       `,
-    );
-    const credentialId = extractResponseId(createCredentialResponse);
+      `
+        <create_credential>
+          <name>${xmlEscape(safeName)}</name>
+          <login>${xmlEscape(safeUsername)}</login>
+          <password>${xmlEscape(safePassword)}</password>
+        </create_credential>
+      `,
+      ...(normalizedType === 'ssh'
+        ? [
+          `
+            <create_lsc_credential>
+              <name>${xmlEscape(safeName)}</name>
+              <login>${xmlEscape(safeUsername)}</login>
+              <password>${xmlEscape(safePassword)}</password>
+            </create_lsc_credential>
+          `,
+        ]
+        : []),
+    ];
 
-    if (!credentialId) {
-      throw new GreenboneServiceError('Unable to create vulnerability credential', {
-        code: 'GREENBONE_CREDENTIAL_CREATE_FAILED',
-      });
+    let lastRetryableError = null;
+
+    for (const command of commands) {
+      try {
+        const createCredentialResponse = await sendGmpCommand(socket, command);
+        const credentialId = extractResponseId(createCredentialResponse);
+
+        if (!credentialId) {
+          throw new GreenboneServiceError('Unable to create vulnerability credential', {
+            code: 'GREENBONE_CREDENTIAL_CREATE_FAILED',
+          });
+        }
+
+        return {
+          credentialId,
+          credentialType: normalizedType,
+        };
+      } catch (error) {
+        if (!(error instanceof GreenboneServiceError) || error.code !== 'GREENBONE_GMP_ERROR') {
+          throw error;
+        }
+
+        const statusText = extractGmpStatusText(error);
+        const retryable = /bogus command name|bogus command parameter|credential type|required command parameter/i
+          .test(statusText);
+
+        if (!retryable) {
+          throw error;
+        }
+
+        lastRetryableError = error;
+      }
     }
 
-    return {
-      credentialId,
-      credentialType: normalizedType,
-    };
+    if (lastRetryableError) {
+      throw lastRetryableError;
+    }
+
+    throw new GreenboneServiceError('Unable to create vulnerability credential', {
+      code: 'GREENBONE_CREDENTIAL_CREATE_FAILED',
+    });
   });
 }
 

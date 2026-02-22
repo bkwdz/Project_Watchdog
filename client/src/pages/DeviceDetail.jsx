@@ -723,13 +723,7 @@ export default function DeviceDetail() {
     if (!device?.os_guess) {
       return '-';
     }
-
-    const source = String(device.os_guess_source || '').trim();
-    const confidence = Number.parseFloat(device.os_guess_confidence);
-    const confidenceLabel = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : '';
-    const meta = [source, confidenceLabel].filter(Boolean).join(', ');
-
-    return meta ? `${device.os_guess} (${meta})` : device.os_guess;
+    return device.os_guess;
   }, [device]);
 
   const saveHostname = async () => {
