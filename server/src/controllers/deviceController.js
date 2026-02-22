@@ -9,6 +9,20 @@ function normalizeOptionalText(value) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function sanitizeOsName(value) {
+  const normalized = normalizeOptionalText(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (/^\/a:|^cpe:\/a:|^cpe:2\.3:a:/i.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
 function resolveRequestedDisplayName(body) {
   if (!body || typeof body !== 'object') {
     return { provided: false, value: null };
@@ -167,7 +181,7 @@ exports.list = async (req, res, next) => {
       lastSeen: device.last_seen,
       displayName: device.display_name,
       os: {
-        name: device.os_guess || null,
+        name: sanitizeOsName(device.os_guess),
         source: device.os_guess_source || null,
         confidence: Number.isFinite(Number(device.os_guess_confidence))
           ? Number(device.os_guess_confidence)
@@ -319,7 +333,7 @@ exports.get = async (req, res, next) => {
       lastSeen: device.last_seen,
       displayName: device.display_name,
       os: {
-        name: device.os_guess || null,
+        name: sanitizeOsName(device.os_guess),
         source: device.os_guess_source || null,
         confidence: Number.isFinite(Number(device.os_guess_confidence))
           ? Number(device.os_guess_confidence)

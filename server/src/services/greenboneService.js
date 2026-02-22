@@ -577,15 +577,60 @@ function extractOsCandidate(detailName, detailValue) {
   return value;
 }
 
-function extractApplicationCpe(detailValue) {
-  const value = normalizeText(detailValue);
+function normalizeApplicationCpeValue(value) {
+  const normalized = normalizeText(value);
 
-  if (!value) {
+  if (!normalized) {
     return null;
   }
 
-  const applicationCpeMatch = value.match(/^(cpe:\/a:[^\s,;]+)/i);
-  return applicationCpeMatch ? applicationCpeMatch[1] : null;
+  if (/^\/a:/i.test(normalized)) {
+    return `cpe:${normalized}`;
+  }
+
+  if (/^cpe:\/a:/i.test(normalized)) {
+    return normalized;
+  }
+
+  return null;
+}
+
+function extractApplicationCpe(detailValue) {
+  return normalizeApplicationCpeValue(detailValue);
+}
+
+function extractApplicationCpes(...values) {
+  const text = values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n');
+
+  if (!text) {
+    return [];
+  }
+
+  const matches = text.match(/(?:cpe:\/a:[^\s,;)\]]+|\/a:[^\s,;)\]]+)/gi) || [];
+  const unique = [];
+  const seen = new Set();
+
+  matches.forEach((match) => {
+    const normalized = normalizeApplicationCpeValue(match);
+
+    if (!normalized) {
+      return;
+    }
+
+    const key = normalized.toLowerCase();
+
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    unique.push(normalized);
+  });
+
+  return unique;
 }
 
 function isInformationalFinding(threatValue, scoreValue) {
@@ -1410,6 +1455,10 @@ function parseReportData(rootNode) {
       merged.service_banners = merged.service_banners.slice(-20);
     }
 
+    if (Array.isArray(merged.applications) && merged.applications.length > 200) {
+      merged.applications = merged.applications.slice(-200);
+    }
+
     hostMetadata.set(host, merged);
   };
 
@@ -1617,11 +1666,20 @@ function parseReportData(rootNode) {
     );
     const nvtOid = normalizeText(result?.nvt?.$?.oid) || null;
     const cveList = parseCveList(
-      [extractText(result.nvt?.cve), extractText(result.cve)]
+      [extractText(result.nvt?.cve), extractText(result.cve), nvtTags.cve]
         .filter(Boolean)
         .join(','),
     );
     const informational = isInformationalFinding(threatText, cvssScore);
+    const appCpes = extractApplicationCpes(
+      name,
+      description,
+      extractText(result.nvt?.tags),
+      extractText(result.nvt?.summary),
+      nvtTags.summary,
+      nvtTags.insight,
+      nvtTags.impact,
+    );
     const bannerCandidates = extractBannerCandidates(
       name,
       description,
@@ -1649,10 +1707,25 @@ function parseReportData(rootNode) {
             threat: normalizeText(threatText),
             qod,
             port: portDescriptor.port,
+            cves: cveList,
+            cvss_score: Number.isFinite(cvssScore) ? cvssScore : null,
+            severity: cvssSeverity,
             description: summarizeText(description, 320),
           },
         ],
         ...(bannerCandidates.length > 0 ? { service_banners: bannerCandidates } : {}),
+        ...(appCpes.length > 0
+          ? {
+            applications: appCpes.map((cpe) => ({
+              cpe,
+              severity: cvssSeverity,
+              cvss_score: Number.isFinite(cvssScore) ? cvssScore : null,
+              qod,
+              finding_name: name,
+              source: 'greenbone',
+            })),
+          }
+          : {}),
       });
     }
 
@@ -1713,6 +1786,8 @@ function parseReportData(rootNode) {
                   name,
                   threat: normalizeText(threatText),
                   qod,
+                  cves: cveList,
+                  severity: cvssSeverity,
                   cvss_score: Number.isFinite(cvssScore) ? cvssScore : null,
                   description: summarizeText(description, 260),
                 },
@@ -1837,7 +1912,16 @@ function parseReportData(rootNode) {
 
       if (applicationCpe) {
         upsertHostMetadata(host, {
-          applications: [applicationCpe],
+          applications: [
+            {
+              cpe: applicationCpe,
+              severity: null,
+              cvss_score: null,
+              qod: null,
+              finding_name: detailName || null,
+              source: detailSource || 'greenbone',
+            },
+          ],
         });
       }
 

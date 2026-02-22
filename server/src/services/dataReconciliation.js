@@ -47,6 +47,16 @@ function normalizeText(value) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function isApplicationCpeLike(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  return /^\/a:|^cpe:\/a:|^cpe:2\.3:a:/i.test(normalized);
+}
+
 function normalizeSource(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return normalized || 'unknown';
@@ -134,7 +144,7 @@ function normalizeOsDetection(entry) {
   const source = normalizeSource(entry.source);
   const name = normalizeText(entry.name || entry.value || entry.os_guess || entry.osGuess);
 
-  if (!name) {
+  if (!name || isApplicationCpeLike(name)) {
     return null;
   }
 
@@ -189,13 +199,17 @@ function selectBestOs(detections, currentDevice = null) {
   const candidates = [...toArray(detections)];
 
   if (currentDevice?.os_guess) {
-    candidates.push({
-      name: currentDevice.os_guess,
-      source: normalizeSource(currentDevice.os_guess_source),
-      confidence: clampConfidence(currentDevice.os_guess_confidence, null),
-      detected_at: new Date().toISOString(),
-      evidence: null,
-    });
+    const currentName = normalizeText(currentDevice.os_guess);
+
+    if (currentName && !isApplicationCpeLike(currentName)) {
+      candidates.push({
+        name: currentName,
+        source: normalizeSource(currentDevice.os_guess_source),
+        confidence: clampConfidence(currentDevice.os_guess_confidence, null),
+        detected_at: new Date().toISOString(),
+        evidence: null,
+      });
+    }
   }
 
   const ranked = sortOsDetections(candidates);
