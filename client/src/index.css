@@ -466,6 +466,41 @@ select:focus {
   gap: 14px;
 }
 
+.device-tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.device-tab-button {
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.device-tab-button:hover {
+  color: var(--text-main);
+  border-color: rgba(57, 201, 255, 0.34);
+}
+
+.device-tab-button.active {
+  color: var(--text-main);
+  border-color: rgba(57, 201, 255, 0.45);
+  background: rgba(57, 201, 255, 0.18);
+}
+
+.device-tab-panel {
+  display: grid;
+  gap: 14px;
+}
+
 .device-identity-row {
   display: flex;
   justify-content: flex-start;
@@ -1171,6 +1206,65 @@ select:focus {
   margin-top: 10px;
 }
 
+.port-detail-row td {
+  background: rgba(7, 15, 31, 0.56);
+}
+
+.port-detail-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.port-detail-section {
+  display: grid;
+  gap: 8px;
+}
+
+.port-detail-section h5 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+}
+
+.port-detail-card {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: rgba(10, 19, 39, 0.7);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.port-detail-title {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.port-detail-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.port-detail-pre {
+  margin: 0;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(4, 9, 19, 0.72);
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 280px;
+  overflow: auto;
+}
+
 .settings-panel-grid {
   display: grid;
   gap: 12px;
@@ -1435,6 +1529,11 @@ select:focus {
     padding-top: 12px;
   }
 
+  .device-tab-button {
+    flex: 1 1 calc(50% - 8px);
+    text-align: center;
+  }
+
   .hostname-edit-row {
     flex-direction: column;
     align-items: stretch;
@@ -1472,5 +1571,9 @@ select:focus {
   .auth-card {
     max-width: 100%;
     padding: 22px 18px;
+  }
+
+  .device-tab-button {
+    flex: 1 1 100%;
   }
 }

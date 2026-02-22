@@ -1,6 +1,7 @@
 const net = require('net');
 const tls = require('tls');
 const { parseStringPromise } = require('xml2js');
+const { mergeJsonValues } = require('./dataReconciliation');
 
 class GreenboneServiceError extends Error {
   constructor(message, { statusCode = 502, code = 'GREENBONE_ERROR', details = null } = {}) {
@@ -146,6 +147,15 @@ function severityFromScore(score) {
   return 'Low';
 }
 
+function normalizeText(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function parsePort(portText) {
   const match = String(portText || '').match(/(\d{1,5})/);
 
@@ -162,6 +172,32 @@ function parsePort(portText) {
   return port;
 }
 
+function parsePortDescriptor(portText) {
+  const raw = String(portText || '').trim();
+
+  if (!raw) {
+    return {
+      port: null,
+      protocol: null,
+      service: null,
+      raw: '',
+    };
+  }
+
+  const detailedMatch = raw.match(/(\d{1,5})\/([a-zA-Z]+)/);
+  const port = detailedMatch ? Number(detailedMatch[1]) : parsePort(raw);
+  const protocol = detailedMatch ? detailedMatch[2].toLowerCase() : null;
+  const serviceHint = raw.match(/\((?:[^:]+:\s*)?([^)]+)\)/);
+  const service = normalizeText(serviceHint?.[1]);
+
+  return {
+    port: Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null,
+    protocol,
+    service,
+    raw,
+  };
+}
+
 function parseCvssScore(...values) {
   for (const value of values) {
     const numeric = Number.parseFloat(String(value || '').trim());
@@ -174,20 +210,278 @@ function parseCvssScore(...values) {
   return null;
 }
 
-function parseCve(value) {
+function parseCveList(value) {
   const raw = String(value || '').trim();
 
   if (!raw || raw.toLowerCase() === 'nocve') {
+    return [];
+  }
+
+  const deduped = [...new Set(
+    raw
+    .split(/[,\s;]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => /^CVE-\d{4}-\d{4,}$/i.test(entry))
+    .map((entry) => entry.toUpperCase()),
+  )];
+
+  return deduped;
+}
+
+function parseCve(value) {
+  return parseCveList(value)[0] || null;
+}
+
+function parseDateValue(value) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
     return null;
   }
 
-  const candidates = raw
-    .split(/[,\s;]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const parsed = Date.parse(normalized);
 
-  const match = candidates.find((entry) => /^CVE-\d{4}-\d{4,}$/i.test(entry));
-  return match || null;
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+
+  return new Date(parsed).toISOString();
+}
+
+function extractIpv4Candidate(value) {
+  const match = String(value || '').match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+  return match ? match[0] : null;
+}
+
+function summarizeText(value, maxLength = 800) {
+  const normalized = String(value || '').trim();
+
+  if (!normalized) {
+    return '';
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function parseLabelValuePairs(value) {
+  const text = String(value || '');
+  const pairs = {};
+
+  text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      const match = line.match(/^([^:]{2,120}):\s*(.+)$/);
+
+      if (!match) {
+        return;
+      }
+
+      const key = match[1]
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      const parsedValue = match[2].trim();
+
+      if (!key || !parsedValue || Object.prototype.hasOwnProperty.call(pairs, key)) {
+        return;
+      }
+
+      pairs[key] = parsedValue;
+    });
+
+  return pairs;
+}
+
+function looksLikeTlsContext(...values) {
+  const text = values
+    .map((value) => String(value || '').toLowerCase())
+    .join(' ');
+
+  return /(tls|ssl|certificate|x\.509|x509)/i.test(text);
+}
+
+function looksLikeSshKeyContext(...values) {
+  const text = values
+    .map((value) => String(value || '').toLowerCase())
+    .join(' ');
+
+  return /(ssh|host key|public key|ssh-rsa|ssh-ed25519|ecdsa-sha2)/i.test(text);
+}
+
+function parseCertificateFromText(value) {
+  const text = summarizeText(value, 4_000);
+
+  if (!text || !looksLikeTlsContext(text)) {
+    return null;
+  }
+
+  const pairs = parseLabelValuePairs(text);
+  const subject = normalizeText(
+    pairs.subject
+    || pairs.subject_dn
+    || pairs.subjectdistinguishedname
+    || pairs.common_name
+    || pairs.cn,
+  );
+  const issuer = normalizeText(
+    pairs.issuer
+    || pairs.issuer_dn
+    || pairs.issuerdistinguishedname,
+  );
+  const serialNumber = normalizeText(
+    pairs.serial
+    || pairs.serial_number
+    || pairs.serialnumber,
+  );
+  const fingerprintMatch = text.match(
+    /(?:sha-?256[^:\n]*fingerprint|fingerprint[^:\n]*sha-?256)\s*:\s*([A-F0-9:]{32,}|SHA256:[A-Za-z0-9+/=]+)/i,
+  ) || text.match(/(SHA256:[A-Za-z0-9+/=]{20,}|(?:[A-F0-9]{2}:){15,}[A-F0-9]{2})/i);
+
+  const fingerprintSha256 = normalizeText(
+    pairs.sha_256_fingerprint
+    || pairs.sha256_fingerprint
+    || pairs.fingerprint_sha_256
+    || fingerprintMatch?.[1],
+  );
+  const notBefore = parseDateValue(
+    pairs.not_before
+    || pairs.valid_from
+    || pairs.validity_not_before,
+  );
+  const notAfter = parseDateValue(
+    pairs.not_after
+    || pairs.valid_to
+    || pairs.validity_not_after
+    || pairs.expiration_date,
+  );
+
+  const hasSignal = subject || issuer || serialNumber || fingerprintSha256 || notBefore || notAfter;
+
+  if (!hasSignal) {
+    return null;
+  }
+
+  return {
+    subject,
+    issuer,
+    serial_number: serialNumber,
+    fingerprint_sha256: fingerprintSha256,
+    not_before: notBefore,
+    not_after: notAfter,
+    raw_text: text,
+    metadata: {
+      parser: 'greenbone_report',
+      fields: pairs,
+    },
+  };
+}
+
+function parseSshKeyFromText(value) {
+  const text = summarizeText(value, 4_000);
+
+  if (!text || !looksLikeSshKeyContext(text)) {
+    return null;
+  }
+
+  const pairs = parseLabelValuePairs(text);
+  const keyTypeMatch = text.match(/\b(ssh-(?:rsa|dss|ed25519)|ecdsa-[^\s:]+)\b/i);
+  const fingerprintMatch = text.match(
+    /(?:fingerprint|sha256)\s*:\s*([A-F0-9:]{16,}|SHA256:[A-Za-z0-9+/=]+)/i,
+  ) || text.match(/(SHA256:[A-Za-z0-9+/=]{20,}|(?:[A-F0-9]{2}:){15,}[A-F0-9]{2})/i);
+  const keyBitsRaw = Number.parseInt(
+    pairs.key_bits
+    || pairs.bits
+    || pairs.key_size
+    || '',
+    10,
+  );
+  const keyBits = Number.isInteger(keyBitsRaw) && keyBitsRaw > 0 ? keyBitsRaw : null;
+  const keyType = normalizeText(
+    pairs.key_type
+    || pairs.algorithm
+    || keyTypeMatch?.[1],
+  );
+  const fingerprint = normalizeText(
+    pairs.fingerprint
+    || pairs.sha256_fingerprint
+    || fingerprintMatch?.[1],
+  );
+
+  if (!keyType && !fingerprint && !keyBits) {
+    return null;
+  }
+
+  return {
+    key_type: keyType,
+    fingerprint,
+    key_bits: keyBits,
+    raw_text: text,
+    metadata: {
+      parser: 'greenbone_report',
+      fields: pairs,
+    },
+  };
+}
+
+function extractOsCandidate(...values) {
+  const text = values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n');
+
+  if (!text) {
+    return null;
+  }
+
+  const pairs = parseLabelValuePairs(text);
+  const explicit = normalizeText(
+    pairs.best_os_cpe
+    || pairs.operating_system
+    || pairs.remote_operating_system
+    || pairs.os
+    || pairs.cpe,
+  );
+
+  if (explicit && !/unknown|not available|could not/i.test(explicit)) {
+    return explicit;
+  }
+
+  const cpeMatch = text.match(/\b(cpe:\/[a-z]:[^\s,;]+)/i);
+
+  if (cpeMatch) {
+    return cpeMatch[1];
+  }
+
+  const lineMatch = text.match(/(?:operating system|remote os|os guess)\s*(?:is|:)\s*([^\n]+)/i);
+
+  if (!lineMatch) {
+    return null;
+  }
+
+  const candidate = normalizeText(lineMatch[1]);
+
+  if (!candidate || /unknown|not available|could not/i.test(candidate)) {
+    return null;
+  }
+
+  return candidate;
+}
+
+function isInformationalFinding(threatValue, scoreValue) {
+  const threat = String(threatValue || '').toLowerCase();
+
+  if (threat.includes('log') || threat.includes('none') || threat.includes('info')) {
+    return true;
+  }
+
+  return Number.isFinite(scoreValue) && scoreValue <= 0;
 }
 
 function parseTaskConcurrencyValue(value) {
@@ -836,40 +1130,480 @@ function collectResultNodes(node, bucket = []) {
   return bucket;
 }
 
-function parseReportVulnerabilities(rootNode) {
-  const results = collectResultNodes(rootNode, []);
+function normalizeDetailKey(value) {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 
-  return results.map((result) => {
-    const host = extractText(result.host) || null;
-    const portText = extractText(result.port);
+  return normalized || 'detail';
+}
+
+function pickRicherText(left, right) {
+  const leftText = normalizeText(left);
+  const rightText = normalizeText(right);
+
+  if (!leftText) {
+    return rightText;
+  }
+
+  if (!rightText) {
+    return leftText;
+  }
+
+  return rightText.length > leftText.length ? rightText : leftText;
+}
+
+function parseReportData(rootNode) {
+  const results = collectResultNodes(rootNode, []);
+  const vulnerabilities = [];
+  const portObservations = new Map();
+  const osDetections = new Map();
+  const tlsCertificates = new Map();
+  const sshHostKeys = new Map();
+  const hostMetadata = new Map();
+
+  const upsertHostMetadata = (host, metadataPatch) => {
+    if (!host || !metadataPatch || typeof metadataPatch !== 'object') {
+      return;
+    }
+
+    const existing = hostMetadata.get(host) || {};
+    hostMetadata.set(host, mergeJsonValues(existing, metadataPatch));
+  };
+
+  const upsertPortObservation = ({
+    host,
+    port,
+    protocol,
+    service,
+    version,
+    metadata,
+  }) => {
+    if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+      return;
+    }
+
+    const normalizedProtocol = normalizeText(protocol)?.toLowerCase() || 'tcp';
+    const key = `${host}|${port}|${normalizedProtocol}`;
+    const current = portObservations.get(key) || {
+      host,
+      port,
+      protocol: normalizedProtocol,
+      state: 'open',
+      service: null,
+      version: null,
+      source: 'greenbone',
+      confidence: 0.95,
+      metadata: {},
+    };
+
+    current.service = pickRicherText(current.service, service);
+    current.version = pickRicherText(current.version, version);
+    current.metadata = mergeJsonValues(current.metadata, metadata || {});
+
+    if (Array.isArray(current.metadata.greenbone_findings) && current.metadata.greenbone_findings.length > 20) {
+      current.metadata.greenbone_findings = current.metadata.greenbone_findings.slice(-20);
+    }
+
+    if (Array.isArray(current.metadata.tls_certificates) && current.metadata.tls_certificates.length > 20) {
+      current.metadata.tls_certificates = current.metadata.tls_certificates.slice(-20);
+    }
+
+    if (Array.isArray(current.metadata.ssh_host_keys) && current.metadata.ssh_host_keys.length > 20) {
+      current.metadata.ssh_host_keys = current.metadata.ssh_host_keys.slice(-20);
+    }
+
+    portObservations.set(key, current);
+  };
+
+  const upsertOsDetection = ({
+    host,
+    name,
+    confidence = 0.95,
+    evidence = null,
+  }) => {
+    if (!host) {
+      return;
+    }
+
+    const osName = normalizeText(name);
+
+    if (!osName) {
+      return;
+    }
+
+    const key = `${host}|${osName.toLowerCase()}`;
+    const normalizedConfidence = Number.isFinite(confidence)
+      ? Math.max(0, Math.min(1, confidence))
+      : 0.95;
+    const existing = osDetections.get(key);
+
+    if (!existing) {
+      osDetections.set(key, {
+        host,
+        name: osName,
+        source: 'greenbone',
+        confidence: normalizedConfidence,
+        evidence: evidence && typeof evidence === 'object' ? evidence : null,
+      });
+      return;
+    }
+
+    if (normalizedConfidence >= existing.confidence) {
+      osDetections.set(key, {
+        ...existing,
+        confidence: normalizedConfidence,
+        evidence: mergeJsonValues(existing.evidence, evidence),
+      });
+      return;
+    }
+
+    existing.evidence = mergeJsonValues(existing.evidence, evidence);
+    osDetections.set(key, existing);
+  };
+
+  const upsertTlsCertificate = (entry) => {
+    if (!entry?.host) {
+      return;
+    }
+
+    const key = [
+      entry.host,
+      entry.port || 'none',
+      entry.protocol || 'tcp',
+      entry.fingerprint_sha256 || '',
+      entry.serial_number || '',
+      entry.subject || '',
+    ]
+      .map((part) => String(part || '').trim().toLowerCase())
+      .join('|');
+    const existing = tlsCertificates.get(key);
+
+    if (!existing) {
+      tlsCertificates.set(key, entry);
+      return;
+    }
+
+    tlsCertificates.set(key, {
+      ...existing,
+      subject: pickRicherText(existing.subject, entry.subject),
+      issuer: pickRicherText(existing.issuer, entry.issuer),
+      serial_number: pickRicherText(existing.serial_number, entry.serial_number),
+      fingerprint_sha256: pickRicherText(existing.fingerprint_sha256, entry.fingerprint_sha256),
+      not_before: existing.not_before || entry.not_before || null,
+      not_after: existing.not_after || entry.not_after || null,
+      raw_text: pickRicherText(existing.raw_text, entry.raw_text),
+      metadata: mergeJsonValues(existing.metadata, entry.metadata),
+    });
+  };
+
+  const upsertSshHostKey = (entry) => {
+    if (!entry?.host) {
+      return;
+    }
+
+    const key = [
+      entry.host,
+      entry.port || 'none',
+      entry.protocol || 'tcp',
+      entry.fingerprint || '',
+      entry.key_type || '',
+    ]
+      .map((part) => String(part || '').trim().toLowerCase())
+      .join('|');
+    const existing = sshHostKeys.get(key);
+
+    if (!existing) {
+      sshHostKeys.set(key, entry);
+      return;
+    }
+
+    sshHostKeys.set(key, {
+      ...existing,
+      key_type: pickRicherText(existing.key_type, entry.key_type),
+      fingerprint: pickRicherText(existing.fingerprint, entry.fingerprint),
+      key_bits: existing.key_bits || entry.key_bits || null,
+      raw_text: pickRicherText(existing.raw_text, entry.raw_text),
+      metadata: mergeJsonValues(existing.metadata, entry.metadata),
+    });
+  };
+
+  results.forEach((result) => {
+    const hostText = extractText(result.host);
+    const host = extractIpv4Candidate(hostText) || normalizeText(hostText);
+    const portDescriptor = parsePortDescriptor(extractText(result.port));
     const cvssScore = parseCvssScore(
       extractText(result.severity),
       extractText(result.nvt?.cvss_base),
       extractText(result.cvss_base),
     );
-
-    const explicitSeverity = normalizeSeverityLabel(
-      extractText(result.threat)
+    const threatText = extractText(result.threat)
       || extractText(result.cvss_severity)
-      || extractText(result.nvt?.threat),
-    );
-
+      || extractText(result.nvt?.threat);
+    const explicitSeverity = normalizeSeverityLabel(threatText);
     const cvssSeverity = explicitSeverity || severityFromScore(cvssScore);
     const name = extractText(result.name) || extractText(result.nvt?.name) || 'Unnamed vulnerability';
     const description = extractText(result.description) || extractText(result.nvt?.summary) || '';
+    const nvtOid = normalizeText(result?.nvt?.$?.oid) || null;
+    const cveList = parseCveList(
+      [extractText(result.nvt?.cve), extractText(result.cve)]
+        .filter(Boolean)
+        .join(','),
+    );
+    const informational = isInformationalFinding(threatText, cvssScore);
 
-    return {
-      host,
-      port: parsePort(portText),
-      cve: parseCve(extractText(result.nvt?.cve) || extractText(result.cve)),
+    if (host && portDescriptor.port) {
+      upsertPortObservation({
+        host,
+        port: portDescriptor.port,
+        protocol: portDescriptor.protocol,
+        service: portDescriptor.service,
+        metadata: {
+          greenbone_findings: [
+            {
+              name,
+              threat: normalizeText(threatText),
+              cvss_score: Number.isFinite(cvssScore) ? cvssScore : null,
+              cves: cveList,
+              description: summarizeText(description, 320),
+            },
+          ],
+        },
+      });
+    }
+
+    const osCandidate = extractOsCandidate(
       name,
-      severity: cvssSeverity,
-      cvss_score: cvssScore,
-      cvss_severity: cvssSeverity,
       description,
-      source: 'greenbone',
-    };
+      extractText(result.nvt?.tags),
+      extractText(result.nvt?.summary),
+    );
+
+    if (host && osCandidate) {
+      upsertOsDetection({
+        host,
+        name: osCandidate,
+        confidence: informational ? 0.98 : 0.9,
+        evidence: {
+          finding_name: name,
+          nvt_oid: nvtOid,
+        },
+      });
+    }
+
+    if (host && looksLikeTlsContext(name, description)) {
+      const cert = parseCertificateFromText(`${name}\n${description}`);
+
+      if (cert) {
+        const certificateEntry = {
+          ...cert,
+          host,
+          port: portDescriptor.port,
+          protocol: portDescriptor.protocol || 'tcp',
+          source: 'greenbone',
+        };
+
+        upsertTlsCertificate(certificateEntry);
+
+        if (portDescriptor.port) {
+          upsertPortObservation({
+            host,
+            port: portDescriptor.port,
+            protocol: portDescriptor.protocol,
+            metadata: {
+              tls_certificates: [
+                {
+                  subject: certificateEntry.subject,
+                  issuer: certificateEntry.issuer,
+                  fingerprint_sha256: certificateEntry.fingerprint_sha256,
+                  not_after: certificateEntry.not_after,
+                },
+              ],
+            },
+          });
+        }
+      }
+    }
+
+    if (host && looksLikeSshKeyContext(name, description)) {
+      const key = parseSshKeyFromText(`${name}\n${description}`);
+
+      if (key) {
+        const keyEntry = {
+          ...key,
+          host,
+          port: portDescriptor.port,
+          protocol: portDescriptor.protocol || 'tcp',
+          source: 'greenbone',
+        };
+
+        upsertSshHostKey(keyEntry);
+
+        if (portDescriptor.port) {
+          upsertPortObservation({
+            host,
+            port: portDescriptor.port,
+            protocol: portDescriptor.protocol,
+            metadata: {
+              ssh_host_keys: [
+                {
+                  key_type: keyEntry.key_type,
+                  fingerprint: keyEntry.fingerprint,
+                  key_bits: keyEntry.key_bits,
+                },
+              ],
+            },
+          });
+        }
+      }
+    }
+
+    if (!informational) {
+      vulnerabilities.push({
+        host,
+        port: portDescriptor.port,
+        cve: cveList[0] || parseCve(extractText(result.nvt?.cve) || extractText(result.cve)),
+        cve_list: cveList,
+        nvt_oid: nvtOid,
+        name,
+        severity: cvssSeverity,
+        cvss_score: cvssScore,
+        cvss_severity: cvssSeverity,
+        description,
+        source: 'greenbone',
+      });
+    }
   });
+
+  const hostDetailNodes = collectNodesByKey(rootNode, 'host', [])
+    .filter((node) => toArray(node?.detail).length > 0);
+
+  hostDetailNodes.forEach((hostNode) => {
+    const hostText = extractText(hostNode.ip) || extractText(hostNode.name) || extractText(hostNode.host);
+    const host = extractIpv4Candidate(hostText) || normalizeText(hostText);
+
+    if (!host) {
+      return;
+    }
+
+    const details = toArray(hostNode.detail);
+
+    details.forEach((detail) => {
+      const detailName = extractText(detail?.name);
+      const detailSource = extractText(detail?.source?.name || detail?.source);
+      const detailValue = extractText(detail?.value) || extractText(detail);
+      const normalizedDetailName = normalizeDetailKey(detailName);
+
+      if (!detailValue) {
+        return;
+      }
+
+      upsertHostMetadata(host, {
+        greenbone_host_details: {
+          [normalizedDetailName]: summarizeText(detailValue, 800),
+        },
+      });
+
+      const osCandidate = extractOsCandidate(detailName, detailValue);
+
+      if (osCandidate) {
+        upsertOsDetection({
+          host,
+          name: osCandidate,
+          confidence: 0.99,
+          evidence: {
+            detail_name: detailName,
+            detail_source: detailSource || null,
+          },
+        });
+      }
+
+      const derivedPort = parsePortDescriptor(`${detailName} ${detailValue}`);
+
+      if (looksLikeTlsContext(detailName, detailValue)) {
+        const cert = parseCertificateFromText(`${detailName}\n${detailValue}`);
+
+        if (cert) {
+          const certificateEntry = {
+            ...cert,
+            host,
+            port: derivedPort.port,
+            protocol: derivedPort.protocol || 'tcp',
+            source: 'greenbone',
+          };
+
+          upsertTlsCertificate(certificateEntry);
+
+          if (derivedPort.port) {
+            upsertPortObservation({
+              host,
+              port: derivedPort.port,
+              protocol: derivedPort.protocol,
+              service: derivedPort.service,
+              metadata: {
+                tls_certificates: [
+                  {
+                    subject: certificateEntry.subject,
+                    issuer: certificateEntry.issuer,
+                    fingerprint_sha256: certificateEntry.fingerprint_sha256,
+                    not_after: certificateEntry.not_after,
+                  },
+                ],
+              },
+            });
+          }
+        }
+      }
+
+      if (looksLikeSshKeyContext(detailName, detailValue)) {
+        const sshKey = parseSshKeyFromText(`${detailName}\n${detailValue}`);
+
+        if (sshKey) {
+          const keyEntry = {
+            ...sshKey,
+            host,
+            port: derivedPort.port,
+            protocol: derivedPort.protocol || 'tcp',
+            source: 'greenbone',
+          };
+
+          upsertSshHostKey(keyEntry);
+
+          if (derivedPort.port) {
+            upsertPortObservation({
+              host,
+              port: derivedPort.port,
+              protocol: derivedPort.protocol,
+              service: derivedPort.service,
+              metadata: {
+                ssh_host_keys: [
+                  {
+                    key_type: keyEntry.key_type,
+                    fingerprint: keyEntry.fingerprint,
+                    key_bits: keyEntry.key_bits,
+                  },
+                ],
+              },
+            });
+          }
+        }
+      }
+    });
+  });
+
+  return {
+    vulnerabilities,
+    ports: [...portObservations.values()],
+    osDetections: [...osDetections.values()],
+    tlsCertificates: [...tlsCertificates.values()],
+    sshHostKeys: [...sshHostKeys.values()],
+    hostMetadata: [...hostMetadata.entries()].map(([host, metadata]) => ({
+      host,
+      metadata,
+    })),
+  };
 }
 
 async function startScan(target, options = {}) {
@@ -1033,11 +1767,17 @@ async function fetchAndParseReport(taskId, reportId) {
       socket,
       `<get_reports report_id="${xmlEscape(resolvedReportId)}" details="1" ignore_pagination="1" />`,
     );
+    const parsedReport = parseReportData(reportResponse.rootNode);
 
     return {
       reportId: resolvedReportId,
       xml: reportResponse.xml,
-      vulnerabilities: parseReportVulnerabilities(reportResponse.rootNode),
+      vulnerabilities: parsedReport.vulnerabilities,
+      ports: parsedReport.ports,
+      osDetections: parsedReport.osDetections,
+      tlsCertificates: parsedReport.tlsCertificates,
+      sshHostKeys: parsedReport.sshHostKeys,
+      hostMetadata: parsedReport.hostMetadata,
     };
   });
 }

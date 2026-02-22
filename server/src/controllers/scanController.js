@@ -10,6 +10,11 @@ const {
   getTaskStatus,
   fetchAndParseReport,
 } = require('../services/greenboneService');
+const {
+  upsertDeviceRecord,
+  upsertPortRecord,
+  buildAssetHash,
+} = require('../services/dataReconciliation');
 const { isValidCidr, isValidTarget, isValidIPv4 } = require('../utils/targetValidation');
 
 const GREENBONE_DISABLED_MESSAGE = 'Vulnerability scanner not enabled';
@@ -239,23 +244,178 @@ async function updateScan(scanId, fields) {
   return updateResult.rows[0] || null;
 }
 
-async function upsertDeviceByIp(client, ipAddress) {
-  const deviceResult = await client.query(
-    `
-      INSERT INTO devices (ip_address, first_seen, last_seen)
-      VALUES ($1::inet, NOW(), NOW())
-      ON CONFLICT (ip_address)
-      DO UPDATE SET last_seen = NOW()
-      RETURNING id
-    `,
-    [ipAddress],
-  );
+function extractHostIp(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
 
-  return deviceResult.rows[0].id;
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  if (isValidIPv4(trimmed)) {
+    return trimmed;
+  }
+
+  const match = trimmed.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+
+  if (!match) {
+    return null;
+  }
+
+  return isValidIPv4(match[0]) ? match[0] : null;
 }
 
-async function storeGreenboneVulnerabilities(scan, vulnerabilities) {
-  if (!Array.isArray(vulnerabilities) || vulnerabilities.length === 0) {
+function asJsonObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return value;
+}
+
+function normalizeCveList(value) {
+  const set = new Set();
+
+  (Array.isArray(value) ? value : [value]).forEach((entry) => {
+    String(entry || '')
+      .split(/[,\s;]+/)
+      .map((token) => token.trim().toUpperCase())
+      .filter((token) => /^CVE-\d{4}-\d{4,}$/i.test(token))
+      .forEach((token) => set.add(token));
+  });
+
+  return [...set];
+}
+
+async function upsertTlsCertificate(client, deviceId, entry) {
+  const assetHash = buildAssetHash([
+    entry.fingerprint_sha256,
+    entry.serial_number,
+    entry.subject,
+    entry.port,
+    entry.protocol,
+  ]);
+
+  await client.query(
+    `
+      INSERT INTO tls_certificates (
+        device_id,
+        asset_hash,
+        port,
+        protocol,
+        subject,
+        issuer,
+        serial_number,
+        fingerprint_sha256,
+        not_before,
+        not_after,
+        raw_text,
+        metadata,
+        source
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
+      ON CONFLICT (device_id, asset_hash)
+      DO UPDATE SET
+        port = COALESCE(EXCLUDED.port, tls_certificates.port),
+        protocol = COALESCE(EXCLUDED.protocol, tls_certificates.protocol),
+        subject = COALESCE(EXCLUDED.subject, tls_certificates.subject),
+        issuer = COALESCE(EXCLUDED.issuer, tls_certificates.issuer),
+        serial_number = COALESCE(EXCLUDED.serial_number, tls_certificates.serial_number),
+        fingerprint_sha256 = COALESCE(EXCLUDED.fingerprint_sha256, tls_certificates.fingerprint_sha256),
+        not_before = COALESCE(EXCLUDED.not_before, tls_certificates.not_before),
+        not_after = COALESCE(EXCLUDED.not_after, tls_certificates.not_after),
+        raw_text = COALESCE(EXCLUDED.raw_text, tls_certificates.raw_text),
+        metadata = COALESCE(tls_certificates.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb),
+        source = EXCLUDED.source,
+        last_seen = NOW()
+    `,
+    [
+      deviceId,
+      assetHash,
+      Number.isInteger(entry.port) ? entry.port : null,
+      entry.protocol || null,
+      entry.subject || null,
+      entry.issuer || null,
+      entry.serial_number || null,
+      entry.fingerprint_sha256 || null,
+      entry.not_before || null,
+      entry.not_after || null,
+      entry.raw_text || null,
+      JSON.stringify(asJsonObject(entry.metadata)),
+      entry.source || 'greenbone',
+    ],
+  );
+}
+
+async function upsertSshHostKey(client, deviceId, entry) {
+  const assetHash = buildAssetHash([
+    entry.fingerprint,
+    entry.key_type,
+    entry.port,
+    entry.protocol,
+  ]);
+
+  await client.query(
+    `
+      INSERT INTO ssh_host_keys (
+        device_id,
+        asset_hash,
+        port,
+        protocol,
+        key_type,
+        fingerprint,
+        key_bits,
+        raw_text,
+        metadata,
+        source
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+      ON CONFLICT (device_id, asset_hash)
+      DO UPDATE SET
+        port = COALESCE(EXCLUDED.port, ssh_host_keys.port),
+        protocol = COALESCE(EXCLUDED.protocol, ssh_host_keys.protocol),
+        key_type = COALESCE(EXCLUDED.key_type, ssh_host_keys.key_type),
+        fingerprint = COALESCE(EXCLUDED.fingerprint, ssh_host_keys.fingerprint),
+        key_bits = COALESCE(EXCLUDED.key_bits, ssh_host_keys.key_bits),
+        raw_text = COALESCE(EXCLUDED.raw_text, ssh_host_keys.raw_text),
+        metadata = COALESCE(ssh_host_keys.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb),
+        source = EXCLUDED.source,
+        last_seen = NOW()
+    `,
+    [
+      deviceId,
+      assetHash,
+      Number.isInteger(entry.port) ? entry.port : null,
+      entry.protocol || null,
+      entry.key_type || null,
+      entry.fingerprint || null,
+      Number.isInteger(entry.key_bits) ? entry.key_bits : null,
+      entry.raw_text || null,
+      JSON.stringify(asJsonObject(entry.metadata)),
+      entry.source || 'greenbone',
+    ],
+  );
+}
+
+async function storeGreenboneReportData(scan, reportData) {
+  const vulnerabilities = Array.isArray(reportData?.vulnerabilities) ? reportData.vulnerabilities : [];
+  const ports = Array.isArray(reportData?.ports) ? reportData.ports : [];
+  const osDetections = Array.isArray(reportData?.osDetections) ? reportData.osDetections : [];
+  const tlsCertificates = Array.isArray(reportData?.tlsCertificates) ? reportData.tlsCertificates : [];
+  const sshHostKeys = Array.isArray(reportData?.sshHostKeys) ? reportData.sshHostKeys : [];
+  const hostMetadata = Array.isArray(reportData?.hostMetadata) ? reportData.hostMetadata : [];
+
+  if (
+    vulnerabilities.length === 0
+    && ports.length === 0
+    && osDetections.length === 0
+    && tlsCertificates.length === 0
+    && sshHostKeys.length === 0
+    && hostMetadata.length === 0
+  ) {
     return 0;
   }
 
@@ -273,18 +433,160 @@ async function storeGreenboneVulnerabilities(scan, vulnerabilities) {
       return existingCountResult.rows[0].count;
     }
 
-    let inserted = 0;
+    const fallbackIp = isValidIPv4(scan.target) ? scan.target : null;
+    const cachedDeviceIds = new Map();
 
-    for (const vulnerability of vulnerabilities) {
-      const hostIp = isValidIPv4(vulnerability.host) ? vulnerability.host : null;
-      const fallbackIp = isValidIPv4(scan.target) ? scan.target : null;
-      const deviceIp = hostIp || fallbackIp;
+    const ensureDeviceId = async (hostValue, patch = null) => {
+      const ipAddress = extractHostIp(hostValue) || fallbackIp;
 
-      if (!deviceIp) {
+      if (!ipAddress) {
+        return null;
+      }
+
+      if (!patch && cachedDeviceIds.has(ipAddress)) {
+        return cachedDeviceIds.get(ipAddress);
+      }
+
+      const payload = patch && typeof patch === 'object' ? patch : {};
+      const device = await upsertDeviceRecord(client, {
+        ipAddress,
+        source: 'greenbone',
+        touchLastSeen: true,
+        ...payload,
+      });
+
+      cachedDeviceIds.set(ipAddress, device.id);
+      return device.id;
+    };
+
+    for (const detail of hostMetadata) {
+      await ensureDeviceId(detail.host, {
+        metadata: asJsonObject(detail.metadata),
+      });
+    }
+
+    for (const detection of osDetections) {
+      await ensureDeviceId(detection.host, {
+        osDetection: {
+          name: detection.name,
+          source: detection.source || 'greenbone',
+          confidence: detection.confidence,
+          evidence: detection.evidence || null,
+        },
+      });
+    }
+
+    for (const portObservation of ports) {
+      const deviceId = await ensureDeviceId(portObservation.host);
+
+      if (!deviceId) {
         continue;
       }
 
-      const deviceId = await upsertDeviceByIp(client, deviceIp);
+      await upsertPortRecord(client, {
+        deviceId,
+        port: portObservation.port,
+        protocol: portObservation.protocol || 'tcp',
+        service: portObservation.service || null,
+        version: portObservation.version || null,
+        state: portObservation.state || 'open',
+        metadata: asJsonObject(portObservation.metadata),
+        source: portObservation.source || 'greenbone',
+        confidence: Number.isFinite(portObservation.confidence) ? portObservation.confidence : 0.95,
+      });
+    }
+
+    for (const certificate of tlsCertificates) {
+      const deviceId = await ensureDeviceId(certificate.host);
+
+      if (!deviceId) {
+        continue;
+      }
+
+      await upsertTlsCertificate(client, deviceId, certificate);
+
+      if (Number.isInteger(certificate.port)) {
+        await upsertPortRecord(client, {
+          deviceId,
+          port: certificate.port,
+          protocol: certificate.protocol || 'tcp',
+          state: 'open',
+          metadata: {
+            tls_certificates: [
+              {
+                subject: certificate.subject || null,
+                issuer: certificate.issuer || null,
+                fingerprint_sha256: certificate.fingerprint_sha256 || null,
+                not_after: certificate.not_after || null,
+              },
+            ],
+          },
+          source: 'greenbone',
+          confidence: 0.95,
+        });
+      }
+    }
+
+    for (const hostKey of sshHostKeys) {
+      const deviceId = await ensureDeviceId(hostKey.host);
+
+      if (!deviceId) {
+        continue;
+      }
+
+      await upsertSshHostKey(client, deviceId, hostKey);
+
+      if (Number.isInteger(hostKey.port)) {
+        await upsertPortRecord(client, {
+          deviceId,
+          port: hostKey.port,
+          protocol: hostKey.protocol || 'tcp',
+          state: 'open',
+          metadata: {
+            ssh_host_keys: [
+              {
+                key_type: hostKey.key_type || null,
+                fingerprint: hostKey.fingerprint || null,
+                key_bits: Number.isInteger(hostKey.key_bits) ? hostKey.key_bits : null,
+              },
+            ],
+          },
+          source: 'greenbone',
+          confidence: 0.95,
+        });
+      }
+    }
+
+    let inserted = 0;
+
+    for (const vulnerability of vulnerabilities) {
+      const cveList = normalizeCveList(vulnerability.cve_list || vulnerability.cve);
+      const deviceId = await ensureDeviceId(vulnerability.host);
+
+      if (!deviceId) {
+        continue;
+      }
+
+      if (Number.isInteger(vulnerability.port)) {
+        await upsertPortRecord(client, {
+          deviceId,
+          port: vulnerability.port,
+          protocol: 'tcp',
+          state: 'open',
+          metadata: {
+            vulnerability_refs: [
+              {
+                cve: vulnerability.cve || cveList[0] || null,
+                cve_list: cveList,
+                nvt_oid: vulnerability.nvt_oid || null,
+                severity: vulnerability.cvss_severity || vulnerability.severity || null,
+              },
+            ],
+          },
+          source: 'greenbone',
+          confidence: 0.95,
+        });
+      }
 
       await client.query(
         `
@@ -292,6 +594,8 @@ async function storeGreenboneVulnerabilities(scan, vulnerabilities) {
             device_id,
             scan_id,
             cve,
+            cve_list,
+            nvt_oid,
             name,
             severity,
             cvss_score,
@@ -300,12 +604,14 @@ async function storeGreenboneVulnerabilities(scan, vulnerabilities) {
             description,
             source
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, $10, $11, $12)
         `,
         [
           deviceId,
           scan.id,
-          vulnerability.cve || null,
+          vulnerability.cve || cveList[0] || null,
+          cveList,
+          vulnerability.nvt_oid || null,
           vulnerability.name || null,
           vulnerability.severity || null,
           Number.isFinite(vulnerability.cvss_score) ? vulnerability.cvss_score : null,
@@ -331,6 +637,8 @@ async function getScanVulnerabilities(scanId) {
         device_id,
         scan_id,
         cve,
+        cve_list,
+        nvt_oid,
         name,
         severity,
         cvss_score,
@@ -508,7 +816,7 @@ async function syncGreenboneScan(scan) {
 
     if (existingCountResult.rows[0].count === 0) {
       const reportData = await fetchAndParseReport(scan.external_task_id, taskStatus.report_id);
-      await storeGreenboneVulnerabilities(scan, reportData.vulnerabilities);
+      await storeGreenboneReportData(scan, reportData);
       updatedScan = await findScanById(scan.id);
     }
   }

@@ -1,5 +1,10 @@
 const { query, withTransaction } = require('../db');
 const { runNmapScan, parseNmapXml } = require('./nmapService');
+const {
+  upsertDeviceRecord,
+  upsertPortRecord,
+  sourceConfidence,
+} = require('./dataReconciliation');
 
 const queue = [];
 const queuedSet = new Set();
@@ -31,22 +36,31 @@ async function updateScanStatus(scanId, fields) {
 
 async function upsertDeviceAndPorts(scanType, host) {
   return withTransaction(async (client) => {
-    const deviceResult = await client.query(
-      `
-        INSERT INTO devices (ip_address, hostname, mac_address, os_guess, first_seen, last_seen)
-        VALUES ($1::inet, $2, $3, $4, NOW(), NOW())
-        ON CONFLICT (ip_address)
-        DO UPDATE SET
-          hostname = COALESCE(EXCLUDED.hostname, devices.hostname),
-          mac_address = COALESCE(EXCLUDED.mac_address, devices.mac_address),
-          os_guess = COALESCE(EXCLUDED.os_guess, devices.os_guess),
-          last_seen = NOW()
-        RETURNING id
-      `,
-      [host.ipAddress, host.hostname, host.macAddress, host.osGuess],
-    );
+    const device = await upsertDeviceRecord(client, {
+      ipAddress: host.ipAddress,
+      hostname: host.hostname,
+      macAddress: host.macAddress,
+      osDetection: host.osGuess
+        ? {
+          name: host.osGuess,
+          source: 'nmap',
+          confidence: host.osConfidence,
+          evidence: {
+            parser: 'nmap_osmatch',
+          },
+        }
+        : null,
+      scriptResults: host.scriptResults,
+      metadata: {
+        nmap: {
+          last_scan_type: scanType,
+        },
+      },
+      source: 'nmap',
+      touchLastSeen: true,
+    });
 
-    const deviceId = deviceResult.rows[0].id;
+    const deviceId = device.id;
 
     if (scanType === 'discovery') {
       return deviceId;
@@ -57,25 +71,22 @@ async function upsertDeviceAndPorts(scanType, host) {
         continue;
       }
 
-      await client.query(
-        `
-          INSERT INTO ports (device_id, port, protocol, service, version, state)
-          VALUES ($1, $2, $3, $4, $5, $6)
-          ON CONFLICT (device_id, port, protocol)
-          DO UPDATE SET
-            service = EXCLUDED.service,
-            version = EXCLUDED.version,
-            state = EXCLUDED.state
-        `,
-        [
-          deviceId,
-          portEntry.port,
-          portEntry.protocol,
-          portEntry.service,
-          portEntry.version,
-          portEntry.state,
-        ],
-      );
+      await upsertPortRecord(client, {
+        deviceId,
+        port: portEntry.port,
+        protocol: portEntry.protocol,
+        service: portEntry.service,
+        version: portEntry.version,
+        state: portEntry.state,
+        scriptResults: portEntry.scriptResults,
+        metadata: {
+          nmap: {
+            state: portEntry.state,
+          },
+        },
+        source: 'nmap',
+        confidence: sourceConfidence('nmap'),
+      });
     }
 
     return deviceId;

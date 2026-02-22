@@ -121,6 +121,8 @@ exports.list = async (req, res, next) => {
           d.hostname,
           d.mac_address,
           d.os_guess,
+          d.os_guess_source,
+          d.os_guess_confidence,
           d.online_status,
           d.last_healthcheck_at,
           d.first_seen,
@@ -159,7 +161,22 @@ exports.get = async (req, res, next) => {
 
     const deviceResult = await query(
       `
-        SELECT id, ip_address, display_name, hostname, mac_address, os_guess, online_status, last_healthcheck_at, first_seen, last_seen
+        SELECT
+          id,
+          ip_address,
+          display_name,
+          hostname,
+          mac_address,
+          os_guess,
+          os_guess_source,
+          os_guess_confidence,
+          os_detections,
+          script_results,
+          metadata,
+          online_status,
+          last_healthcheck_at,
+          first_seen,
+          last_seen
         FROM devices
         WHERE id = $1
         LIMIT 1
@@ -175,7 +192,17 @@ exports.get = async (req, res, next) => {
 
     const portsResult = await query(
       `
-        SELECT id, port, protocol, service, version, state
+        SELECT
+          id,
+          port,
+          protocol,
+          service,
+          version,
+          state,
+          metadata,
+          script_results,
+          last_source,
+          source_confidence
         FROM ports
         WHERE device_id = $1
         ORDER BY port ASC, protocol ASC
@@ -189,6 +216,8 @@ exports.get = async (req, res, next) => {
           id,
           scan_id,
           cve,
+          cve_list,
+          nvt_oid,
           name,
           severity,
           cvss_score,
@@ -203,6 +232,51 @@ exports.get = async (req, res, next) => {
       [deviceId],
     );
 
+    const tlsCertificatesResult = await query(
+      `
+        SELECT
+          id,
+          port,
+          protocol,
+          subject,
+          issuer,
+          serial_number,
+          fingerprint_sha256,
+          not_before,
+          not_after,
+          raw_text,
+          metadata,
+          source,
+          first_seen,
+          last_seen
+        FROM tls_certificates
+        WHERE device_id = $1
+        ORDER BY port ASC NULLS LAST, id DESC
+      `,
+      [deviceId],
+    );
+
+    const sshHostKeysResult = await query(
+      `
+        SELECT
+          id,
+          port,
+          protocol,
+          key_type,
+          fingerprint,
+          key_bits,
+          raw_text,
+          metadata,
+          source,
+          first_seen,
+          last_seen
+        FROM ssh_host_keys
+        WHERE device_id = $1
+        ORDER BY port ASC NULLS LAST, id DESC
+      `,
+      [deviceId],
+    );
+
     return res.json({
       ...device,
       ip: device.ip_address,
@@ -213,6 +287,8 @@ exports.get = async (req, res, next) => {
       displayName: device.display_name,
       ports: portsResult.rows,
       vulnerabilities: vulnerabilitiesResult.rows,
+      tls_certificates: tlsCertificatesResult.rows,
+      ssh_host_keys: sshHostKeysResult.rows,
     });
   } catch (err) {
     return next(err);
