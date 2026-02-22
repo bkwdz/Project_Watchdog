@@ -159,6 +159,20 @@ function extractCvesFromValue(value) {
   return [...cves];
 }
 
+function normalizeApplicationCpe(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (!/^cpe:\/a:[^:\s|,;)\]]+:[^:\s|,;)\]]+(?::[^:\s|,;)\]]+)*$/i.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
 function portKey(row) {
   return `${row?.port ?? 'unknown'}-${row?.protocol ?? 'proto'}-${row?.id ?? 'row'}`;
 }
@@ -188,6 +202,7 @@ export default function DeviceDetail() {
   const [vulnTcpPorts, setVulnTcpPorts] = useState('1-1000');
   const [vulnUdpPorts, setVulnUdpPorts] = useState('');
   const [historyRefreshing, setHistoryRefreshing] = useState(false);
+  const [historyScanId, setHistoryScanId] = useState('');
   const [useCredentials, setUseCredentials] = useState(false);
   const [credentialMode, setCredentialMode] = useState('existing');
   const [credentialType, setCredentialType] = useState('ssh');
@@ -476,7 +491,10 @@ export default function DeviceDetail() {
     setHistoryRefreshing(true);
 
     try {
-      const result = await refreshDeviceFromGreenboneHistory(device.id);
+      const result = await refreshDeviceFromGreenboneHistory(
+        device.id,
+        historyScanId ? Number(historyScanId) : null,
+      );
       await loadDevice();
       await loadScans();
       pushToast(
@@ -503,6 +521,28 @@ export default function DeviceDetail() {
       });
   }, [device?.ip_address, scans]);
 
+  const completedGreenboneScans = useMemo(
+    () => relatedScans.filter(
+      (scan) => scan?.scanner_type === 'greenbone' && scan?.status === 'completed' && scan?.external_task_id,
+    ),
+    [relatedScans],
+  );
+
+  useEffect(() => {
+    if (completedGreenboneScans.length === 0) {
+      setHistoryScanId('');
+      return;
+    }
+
+    setHistoryScanId((current) => {
+      if (current && completedGreenboneScans.some((scan) => String(scan.id) === String(current))) {
+        return current;
+      }
+
+      return String(completedGreenboneScans[0].id);
+    });
+  }, [completedGreenboneScans]);
+
   const deviceMetadata = useMemo(() => toObject(device?.metadata), [device]);
   const portRows = useMemo(() => (Array.isArray(device?.ports) ? device.ports : []), [device]);
   const rawVulnerabilityRows = useMemo(
@@ -524,12 +564,12 @@ export default function DeviceDetail() {
     entries.forEach((entry) => {
       const parsedEntry = typeof entry === 'string'
         ? {
-          cpe: String(entry || '').trim(),
+          cpe: normalizeApplicationCpe(entry),
           severity: 'Low',
           cvss_score: null,
         }
         : {
-          cpe: String(entry?.cpe || entry?.value || '').trim(),
+          cpe: normalizeApplicationCpe(entry?.cpe || entry?.value),
           severity: entry?.severity || 'Low',
           cvss_score: Number.parseFloat(entry?.cvss_score),
         };
@@ -1286,10 +1326,35 @@ export default function DeviceDetail() {
                         {vulnStatusLoaded && vulnStatusMessage && (
                           <p className="warning-text vuln-status-inline">{vulnStatusMessage}</p>
                         )}
+                        {completedGreenboneScans.length > 0 && (
+                          <div className="field-stack vuln-port-field">
+                            <label htmlFor="history-scan-id">Refresh Scan</label>
+                            <select
+                              id="history-scan-id"
+                              value={historyScanId}
+                              disabled={historyRefreshing || vulnTriggering || loading || !device}
+                              onChange={(event) => setHistoryScanId(event.target.value)}
+                            >
+                              {completedGreenboneScans.map((scan) => (
+                                <option key={scan.id} value={scan.id}>
+                                  #{scan.id} - {formatDateTime(scan.completed_at || scan.started_at)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
                         <button
                           type="button"
                           className="small-button"
-                          disabled={!vulnEnabled || !vulnStatusLoaded || historyRefreshing || vulnTriggering || loading || !device}
+                          disabled={
+                            !vulnEnabled
+                            || !vulnStatusLoaded
+                            || historyRefreshing
+                            || vulnTriggering
+                            || loading
+                            || !device
+                            || (completedGreenboneScans.length > 0 && !historyScanId)
+                          }
                           onClick={refreshFromGreenboneHistory}
                         >
                           {historyRefreshing ? 'Refreshing...' : 'Refresh From Greenbone History'}

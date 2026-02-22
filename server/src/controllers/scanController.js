@@ -467,6 +467,37 @@ async function findLatestCompletedGreenboneScanForDeviceIp(ipAddress) {
   return result.rows[0] || null;
 }
 
+async function findCompletedGreenboneScanByIdForDeviceIp(scanId, ipAddress) {
+  const parsedScanId = Number(scanId);
+  const safeIp = String(ipAddress || '').trim();
+
+  if (!Number.isInteger(parsedScanId) || parsedScanId < 1 || !isValidIPv4(safeIp)) {
+    return null;
+  }
+
+  const result = await query(
+    `
+      SELECT ${SCAN_COLUMNS}
+      FROM scans
+      WHERE id = $1
+        AND COALESCE(scanner_type, 'nmap') = 'greenbone'
+        AND status = 'completed'
+        AND external_task_id IS NOT NULL
+        AND (
+          target = $2
+          OR (
+            POSITION('/' IN target) > 0
+            AND $2::inet << target::cidr
+          )
+        )
+      LIMIT 1
+    `,
+    [parsedScanId, safeIp],
+  );
+
+  return result.rows[0] || null;
+}
+
 async function updateScan(scanId, fields) {
   const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
 
@@ -696,12 +727,31 @@ async function storeGreenboneReportData(scan, reportData, { replaceExisting = fa
 
     const fallbackIp = isValidIPv4(scan.target) ? scan.target : null;
     const cachedDeviceIds = new Map();
+    const cleanedDeviceIps = new Set();
 
     const ensureDeviceId = async (hostValue, patch = null) => {
       const ipAddress = extractHostIp(hostValue) || fallbackIp;
 
       if (!ipAddress) {
         return null;
+      }
+
+      if (replaceExisting && !cleanedDeviceIps.has(ipAddress)) {
+        await client.query(
+          `
+            UPDATE devices
+            SET metadata = (
+              COALESCE(metadata, '{}'::jsonb)
+              - 'applications'
+              - 'greenbone_logs'
+              - 'greenbone_host_details'
+              - 'service_banners'
+            )
+            WHERE ip_address = $1::inet
+          `,
+          [ipAddress],
+        );
+        cleanedDeviceIps.add(ipAddress);
       }
 
       if (!patch && cachedDeviceIds.has(ipAddress)) {
@@ -1334,11 +1384,16 @@ exports.refreshDeviceFromGreenboneHistory = async (req, res, next) => {
       return res.status(404).json({ error: 'Device not found' });
     }
 
-    const scan = await findLatestCompletedGreenboneScanForDeviceIp(device.ip_address);
+    const requestedScanId = Number(req.body?.scan_id);
+    const scan = Number.isInteger(requestedScanId) && requestedScanId > 0
+      ? await findCompletedGreenboneScanByIdForDeviceIp(requestedScanId, device.ip_address)
+      : await findLatestCompletedGreenboneScanForDeviceIp(device.ip_address);
 
     if (!scan) {
       return res.status(404).json({
-        error: 'No completed vulnerability scan history found for this device',
+        error: Number.isInteger(requestedScanId) && requestedScanId > 0
+          ? 'Requested completed Greenbone scan was not found for this device'
+          : 'No completed vulnerability scan history found for this device',
       });
     }
 

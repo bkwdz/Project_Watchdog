@@ -232,6 +232,22 @@ function parseCve(value) {
   return parseCveList(value)[0] || null;
 }
 
+function extractCvesFromText(...values) {
+  const set = new Set();
+
+  values
+    .map((value) => String(value || ''))
+    .forEach((text) => {
+      const matches = text.match(/\bCVE-\d{4}-\d{4,}\b/gi) || [];
+
+      matches.forEach((match) => {
+        set.add(String(match).toUpperCase());
+      });
+    });
+
+  return [...set];
+}
+
 function parseDateValue(value) {
   const normalized = normalizeText(value);
 
@@ -584,15 +600,18 @@ function normalizeApplicationCpeValue(value) {
     return null;
   }
 
-  if (/^\/a:/i.test(normalized)) {
-    return `cpe:${normalized}`;
+  const withPrefix = /^\/a:/i.test(normalized)
+    ? `cpe:${normalized}`
+    : normalized;
+
+  if (!/^cpe:\/a:/i.test(withPrefix)) {
+    return null;
   }
 
-  if (/^cpe:\/a:/i.test(normalized)) {
-    return normalized;
-  }
+  const lower = withPrefix.toLowerCase();
+  const validCpe = /^cpe:\/a:[^:\s|,;)\]]+:[^:\s|,;)\]]+(?::[^:\s|,;)\]]+)*$/i.test(lower);
 
-  return null;
+  return validCpe ? lower : null;
 }
 
 function extractApplicationCpe(detailValue) {
@@ -609,7 +628,7 @@ function extractApplicationCpes(...values) {
     return [];
   }
 
-  const matches = text.match(/(?:cpe:\/a:[^\s,;)\]]+|\/a:[^\s,;)\]]+)/gi) || [];
+  const matches = text.match(/(?:cpe:\/a:[^\s,;|)\]]+|\/a:[^\s,;|)\]]+)/gi) || [];
   const unique = [];
   const seen = new Set();
 
@@ -1645,8 +1664,8 @@ function parseReportData(rootNode) {
       || nvtTags.severity;
     const explicitSeverity = normalizeSeverityLabel(threatText);
     const cvssSeverity = explicitSeverity || severityFromScore(cvssScore);
-    const name = extractText(result.name) || extractText(result.nvt?.name) || 'Unnamed vulnerability';
-    const description = extractText(result.description) || extractText(result.nvt?.summary) || '';
+    const rawName = extractText(result.name) || extractText(result.nvt?.name) || '';
+    const description = normalizeText(extractText(result.description) || extractText(result.nvt?.summary)) || '';
     const qod = parseQodValue(
       extractText(result.qod?.value),
       extractText(result.qod),
@@ -1665,14 +1684,27 @@ function parseReportData(rootNode) {
       || nvtTags.solution,
     );
     const nvtOid = normalizeText(result?.nvt?.$?.oid) || null;
-    const cveList = parseCveList(
+    const name = normalizeText(rawName);
+    const displayName = name || (nvtOid ? `NVT ${nvtOid}` : null);
+    const explicitCves = parseCveList(
       [extractText(result.nvt?.cve), extractText(result.cve), nvtTags.cve]
         .filter(Boolean)
         .join(','),
     );
+    const inferredCves = extractCvesFromText(
+      rawName,
+      description,
+      extractText(result.nvt?.tags),
+      extractText(result.nvt?.summary),
+      nvtTags.summary,
+      nvtTags.insight,
+      nvtTags.impact,
+      nvtTags.solution,
+    );
+    const cveList = [...new Set([...explicitCves, ...inferredCves])];
     const informational = isInformationalFinding(threatText, cvssScore);
     const appCpes = extractApplicationCpes(
-      name,
+      rawName,
       description,
       extractText(result.nvt?.tags),
       extractText(result.nvt?.summary),
@@ -1681,7 +1713,7 @@ function parseReportData(rootNode) {
       nvtTags.impact,
     );
     const bannerCandidates = extractBannerCandidates(
-      name,
+      displayName || rawName,
       description,
       nvtTags.summary,
       nvtTags.insight,
@@ -1691,7 +1723,7 @@ function parseReportData(rootNode) {
     const mentionedPorts = parsePortMentionsFromText(
       [
         extractText(result.port),
-        name,
+        displayName || rawName,
         description,
         nvtTags.summary,
         nvtTags.solution,
@@ -1702,7 +1734,7 @@ function parseReportData(rootNode) {
       upsertHostMetadata(host, {
         greenbone_logs: [
           {
-            name,
+            name: displayName,
             informational,
             threat: normalizeText(threatText),
             qod,
@@ -1721,7 +1753,7 @@ function parseReportData(rootNode) {
               severity: cvssSeverity,
               cvss_score: Number.isFinite(cvssScore) ? cvssScore : null,
               qod,
-              finding_name: name,
+              finding_name: displayName,
               source: 'greenbone',
             })),
           }
@@ -1738,7 +1770,7 @@ function parseReportData(rootNode) {
         metadata: {
           greenbone_findings: [
             {
-              name,
+              name: displayName,
               threat: normalizeText(threatText),
               cvss_score: Number.isFinite(cvssScore) ? cvssScore : null,
               qod,
@@ -1783,7 +1815,7 @@ function parseReportData(rootNode) {
             metadata: {
               greenbone_logs: [
                 {
-                  name,
+                  name: displayName,
                   threat: normalizeText(threatText),
                   qod,
                   cves: cveList,
@@ -1798,8 +1830,8 @@ function parseReportData(rootNode) {
         });
     }
 
-    if (host && looksLikeTlsContext(name, description)) {
-      const cert = parseCertificateFromText(`${name}\n${description}`);
+    if (host && looksLikeTlsContext(displayName || rawName, description)) {
+      const cert = parseCertificateFromText(`${displayName || rawName}\n${description}`);
 
       if (cert) {
         const certificateEntry = {
@@ -1832,8 +1864,8 @@ function parseReportData(rootNode) {
       }
     }
 
-    if (host && looksLikeSshKeyContext(name, description)) {
-      const key = parseSshKeyFromText(`${name}\n${description}`);
+    if (host && looksLikeSshKeyContext(displayName || rawName, description)) {
+      const key = parseSshKeyFromText(`${displayName || rawName}\n${description}`);
 
       if (key) {
         const keyEntry = {
@@ -1869,13 +1901,26 @@ function parseReportData(rootNode) {
       ? (normalizeText(threatText) || cvssSeverity || 'Log')
       : cvssSeverity;
 
+    const hasMeaningfulFinding = Boolean(
+      displayName
+      || nvtOid
+      || cveList.length > 0
+      || description
+      || Number.isFinite(cvssScore)
+      || Number.isInteger(portDescriptor.port),
+    );
+
+    if (!hasMeaningfulFinding) {
+      return;
+    }
+
     vulnerabilities.push({
       host,
       port: portDescriptor.port,
       cve: cveList[0] || parseCve(extractText(result.nvt?.cve) || extractText(result.cve)),
       cve_list: cveList,
       nvt_oid: nvtOid,
-      name,
+      name: displayName,
       severity: effectiveSeverity,
       cvss_score: cvssScore,
       cvss_severity: effectiveSeverity,
