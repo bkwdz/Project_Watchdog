@@ -268,6 +268,12 @@ function isTerminalStatus(status) {
   return status === 'completed' || status === 'failed';
 }
 
+function isGreenboneScanRecord(scan) {
+  const scannerType = String(scan?.scanner_type || '').trim().toLowerCase();
+  const scanType = String(scan?.scan_type || '').trim().toLowerCase();
+  return scannerType === 'greenbone' || scanType === 'vulnerability';
+}
+
 function toControllerError(error, fallbackMessage) {
   if (error instanceof GreenboneServiceError) {
     return {
@@ -1012,25 +1018,44 @@ async function getScanVulnerabilities(scanId) {
   const vulnerabilityResult = await query(
     `
       SELECT
-        id,
-        device_id,
-        scan_id,
-        cve,
-        cve_list,
-        nvt_oid,
-        name,
-        severity,
-        cvss_score,
-        cvss_severity,
-        qod,
-        cvss_vector,
-        solution,
-        port,
-        description,
-        source
-      FROM vulnerabilities
-      WHERE scan_id = $1
-      ORDER BY cvss_score DESC NULLS LAST, id DESC
+        v.id,
+        v.device_id,
+        v.scan_id,
+        d.ip_address::text AS device_ip,
+        COALESCE(NULLIF(d.display_name, ''), NULLIF(d.hostname, ''), d.ip_address::text) AS device_name,
+        v.cve,
+        v.cve_list,
+        v.nvt_oid,
+        v.name,
+        v.severity,
+        v.cvss_score,
+        v.cvss_severity,
+        v.qod,
+        v.cvss_vector,
+        v.solution,
+        v.port,
+        v.description,
+        v.source,
+        port_match.protocol AS port_protocol,
+        port_match.state AS port_state,
+        port_match.service AS port_service,
+        port_match.version AS port_version
+      FROM vulnerabilities v
+      INNER JOIN devices d ON d.id = v.device_id
+      LEFT JOIN LATERAL (
+        SELECT p.protocol, p.state, p.service, p.version
+        FROM ports p
+        WHERE p.device_id = v.device_id
+          AND v.port IS NOT NULL
+          AND p.port = v.port
+        ORDER BY
+          CASE WHEN LOWER(COALESCE(p.state, '')) = 'open' THEN 0 ELSE 1 END,
+          CASE WHEN LOWER(COALESCE(p.protocol, '')) = 'tcp' THEN 0 ELSE 1 END,
+          p.id DESC
+        LIMIT 1
+      ) AS port_match ON TRUE
+      WHERE v.scan_id = $1
+      ORDER BY v.cvss_score DESC NULLS LAST, v.id DESC
     `,
     [scanId],
   );
@@ -1097,6 +1122,8 @@ async function getNmapTargetDevices(scan, { enforceWindow = true } = {}) {
         d.hostname,
         d.os_guess,
         d.online_status,
+        d.script_results,
+        d.metadata,
         d.last_seen,
         COALESCE(COUNT(p.id) FILTER (WHERE p.state = 'open'), 0)::int AS open_ports,
         COALESCE(COUNT(p.id) FILTER (WHERE p.state = 'open' AND p.protocol = 'tcp'), 0)::int AS tcp_open_ports,
@@ -1152,8 +1179,11 @@ async function getNmapTargetOpenPorts(scan, { enforceWindow = true, limit = 500 
       INNER JOIN devices d ON d.id = p.device_id
       WHERE ${targetPredicate.clause}
         ${windowClause}
-        AND p.state = 'open'
-      ORDER BY d.ip_address ASC, p.port ASC, p.protocol ASC
+      ORDER BY
+        d.ip_address ASC,
+        CASE WHEN LOWER(COALESCE(p.state, '')) = 'open' THEN 0 ELSE 1 END,
+        p.port ASC,
+        p.protocol ASC
       LIMIT $${params.length}
     `,
     params,
@@ -1167,18 +1197,20 @@ async function buildNmapSummary(scan) {
   let scope = hasWindow ? 'scan_window' : 'target_snapshot';
 
   let discoveredDevices = await getNmapTargetDevices(scan, { enforceWindow: hasWindow });
-  let openPorts = await getNmapTargetOpenPorts(scan, { enforceWindow: hasWindow });
+  let observedPorts = await getNmapTargetOpenPorts(scan, { enforceWindow: hasWindow });
 
-  if (hasWindow && discoveredDevices.length === 0 && openPorts.length === 0) {
+  if (hasWindow && discoveredDevices.length === 0 && observedPorts.length === 0) {
     discoveredDevices = await getNmapTargetDevices(scan, { enforceWindow: false });
-    openPorts = await getNmapTargetOpenPorts(scan, { enforceWindow: false });
+    observedPorts = await getNmapTargetOpenPorts(scan, { enforceWindow: false });
     scope = 'target_snapshot';
   }
+
+  const openPorts = observedPorts.filter((row) => String(row.state || '').toLowerCase() === 'open');
 
   return {
     summary: {
       hosts_up: discoveredDevices.length,
-      ports_observed: openPorts.length,
+      ports_observed: observedPorts.length,
       tcp_open_ports: openPorts.filter((row) => String(row.protocol || '').toLowerCase() === 'tcp').length,
       udp_open_ports: openPorts.filter((row) => String(row.protocol || '').toLowerCase() === 'udp').length,
       top_services: summarizeTopServices(openPorts),
@@ -1188,7 +1220,7 @@ async function buildNmapSummary(scan) {
         : 'No device updates were recorded in the scan window; showing latest target snapshot.',
     },
     discovered_devices: discoveredDevices,
-    open_ports: openPorts,
+    open_ports: observedPorts,
   };
 }
 
@@ -1308,7 +1340,7 @@ async function buildGreenboneSummary(scan) {
 }
 
 async function syncGreenboneScan(scan) {
-  if (scan.scanner_type !== 'greenbone') {
+  if (!isGreenboneScanRecord(scan)) {
     return scan;
   }
 
@@ -1387,7 +1419,7 @@ exports.listScans = async (req, res, next) => {
 
     if (isGreenboneEnabled()) {
       const runningGreenboneScans = scans.filter(
-        (scan) => scan.scanner_type === 'greenbone' && !isTerminalStatus(scan.status),
+        (scan) => isGreenboneScanRecord(scan) && !isTerminalStatus(scan.status),
       );
 
       await Promise.all(
@@ -1842,7 +1874,7 @@ exports.getScan = async (req, res, next) => {
     let discoveredDevices = [];
     let nmapOpenPorts = [];
 
-    if (scan.scanner_type === 'greenbone') {
+    if (isGreenboneScanRecord(scan)) {
       if (!isGreenboneEnabled()) {
         return res.status(503).json({ error: GREENBONE_DISABLED_MESSAGE });
       }
@@ -1866,8 +1898,11 @@ exports.getScan = async (req, res, next) => {
       nmapOpenPorts = nmapResult.open_ports;
     }
 
+    const resolvedScannerType = isGreenboneScanRecord(scan) ? 'greenbone' : 'nmap';
+
     return res.json({
       ...scan,
+      scanner_type: resolvedScannerType,
       summary,
       vulnerabilities,
       discovered_devices: discoveredDevices,

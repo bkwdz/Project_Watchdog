@@ -196,6 +196,48 @@ function buildTopServicesFallback(rows, limit = 8) {
     .slice(0, limit);
 }
 
+function isGreenboneScan(scan) {
+  const scannerType = String(scan?.scanner_type || '').trim().toLowerCase();
+  const scanType = String(scan?.scan_type || '').trim().toLowerCase();
+  return scannerType === 'greenbone' || scanType === 'vulnerability';
+}
+
+function toOnlineStatusLabel(value) {
+  if (typeof value === 'boolean') {
+    return value ? 'online' : 'offline';
+  }
+
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (normalized === 'true' || normalized === '1') {
+    return 'online';
+  }
+
+  if (normalized === 'false' || normalized === '0') {
+    return 'offline';
+  }
+
+  return normalized || 'unknown';
+}
+
+function formatGreenboneLocation(row) {
+  if (Number.isInteger(row?.port) && row.port > 0) {
+    const protocol = String(row?.port_protocol || '').trim().toLowerCase() || 'tcp';
+    return `${row.port}/${protocol}`;
+  }
+
+  return '-';
+}
+
+const GREENBONE_SCAN_TABS = [
+  { key: 'information', label: 'Information' },
+  { key: 'results', label: 'Results' },
+  { key: 'hosts', label: 'Hosts' },
+  { key: 'ports', label: 'Ports' },
+  { key: 'cves', label: 'CVEs' },
+  { key: 'logs', label: 'Logs' },
+];
+
 export default function ScanDetail() {
   const { id } = useParams();
   const [scan, setScan] = useState(null);
@@ -205,6 +247,7 @@ export default function ScanDetail() {
   const [findingSearch, setFindingSearch] = useState('');
   const [expandedVulnerabilities, setExpandedVulnerabilities] = useState({});
   const [expandedPorts, setExpandedPorts] = useState({});
+  const [activeGreenboneTab, setActiveGreenboneTab] = useState('information');
 
   const loadScan = useCallback(async () => {
     setError('');
@@ -243,9 +286,14 @@ export default function ScanDetail() {
     };
   }, [isActive, loadScan]);
 
-  const scannerType = String(scan?.scanner_type || 'nmap').toLowerCase();
-  const isGreenbone = scannerType === 'greenbone';
+  const isGreenbone = isGreenboneScan(scan);
   const summary = toObject(scan?.summary);
+
+  useEffect(() => {
+    if (!isGreenbone && activeGreenboneTab !== 'information') {
+      setActiveGreenboneTab('information');
+    }
+  }, [activeGreenboneTab, isGreenbone]);
 
   const vulnerabilities = useMemo(
     () => (Array.isArray(scan?.vulnerabilities) ? scan.vulnerabilities : []),
@@ -261,6 +309,111 @@ export default function ScanDetail() {
     () => (Array.isArray(scan?.nmap_open_ports) ? scan.nmap_open_ports : []),
     [scan?.nmap_open_ports],
   );
+
+  const logFindings = useMemo(
+    () => vulnerabilities.filter((row) => normalizeSeverityBucket(row.cvss_severity || row.severity, row.cvss_score) === 'log'),
+    [vulnerabilities],
+  );
+
+  const greenbonePortRows = useMemo(() => {
+    const map = new Map();
+
+    vulnerabilities.forEach((row) => {
+      const location = formatGreenboneLocation(row);
+      const key = `${location}|${row.port ?? '-'}`;
+      const bucket = normalizeSeverityBucket(row.cvss_severity || row.severity, row.cvss_score);
+      const score = Number.parseFloat(row.cvss_score);
+
+      if (!map.has(key)) {
+        map.set(key, {
+          row_key: key,
+          location,
+          findings_count: 0,
+          critical_count: 0,
+          high_count: 0,
+          medium_count: 0,
+          low_count: 0,
+          log_count: 0,
+          top_cvss: Number.isFinite(score) ? score : null,
+        });
+      }
+
+      const entry = map.get(key);
+      entry.findings_count += 1;
+
+      if (bucket === 'critical') {
+        entry.critical_count += 1;
+      } else if (bucket === 'high') {
+        entry.high_count += 1;
+      } else if (bucket === 'medium') {
+        entry.medium_count += 1;
+      } else if (bucket === 'log') {
+        entry.log_count += 1;
+      } else {
+        entry.low_count += 1;
+      }
+
+      if (Number.isFinite(score)) {
+        entry.top_cvss = entry.top_cvss === null ? score : Math.max(entry.top_cvss, score);
+      }
+    });
+
+    return [...map.values()]
+      .sort((left, right) => right.findings_count - left.findings_count || left.location.localeCompare(right.location));
+  }, [vulnerabilities]);
+
+  const greenboneCveRows = useMemo(() => {
+    const groups = new Map();
+
+    vulnerabilities.forEach((row) => {
+      const cves = toCveArray(row);
+      if (cves.length === 0) {
+        return;
+      }
+
+      const nvtName = String(row.name || '').trim() || (row.nvt_oid ? `NVT ${row.nvt_oid}` : 'Unknown NVT');
+      const groupKey = String(row.nvt_oid || nvtName).trim().toLowerCase();
+      const score = Number.parseFloat(row.cvss_score);
+      const bucket = normalizeSeverityBucket(row.cvss_severity || row.severity, row.cvss_score);
+
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, {
+          row_key: groupKey,
+          nvt_name: nvtName,
+          cves: new Set(),
+          top_cvss: Number.isFinite(score) ? score : null,
+          highest_bucket: bucket,
+        });
+      }
+
+      const entry = groups.get(groupKey);
+      cves.forEach((cve) => entry.cves.add(cve));
+      if (Number.isFinite(score)) {
+        entry.top_cvss = entry.top_cvss === null ? score : Math.max(entry.top_cvss, score);
+      }
+
+      const rank = { log: 0, low: 1, medium: 2, high: 3, critical: 4 };
+      if ((rank[bucket] ?? 0) > (rank[entry.highest_bucket] ?? 0)) {
+        entry.highest_bucket = bucket;
+      }
+    });
+
+    return [...groups.values()]
+      .map((entry) => ({
+        row_key: entry.row_key,
+        nvt_name: entry.nvt_name,
+        cves: [...entry.cves].sort(),
+        highest_severity: severityLabel(entry.highest_bucket),
+        highest_bucket: entry.highest_bucket,
+        top_cvss: entry.top_cvss,
+      }))
+      .sort((left, right) => {
+        const severityRank = { Critical: 4, High: 3, Medium: 2, Low: 1, Log: 0 };
+        return (severityRank[right.highest_severity] ?? -1) - (severityRank[left.highest_severity] ?? -1)
+          || (right.cves.length - left.cves.length)
+          || left.nvt_name.localeCompare(right.nvt_name);
+      });
+  }, [vulnerabilities]);
 
   const topServices = useMemo(() => {
     const fromSummary = Array.isArray(summary.top_services) ? summary.top_services : [];
@@ -431,6 +584,14 @@ export default function ScanDetail() {
     [filteredVulnerabilities],
   );
 
+  const logFindingsWithKeys = useMemo(
+    () => logFindings.map((row, index) => ({
+      ...row,
+      _row_key: vulnerabilityRowKey(row, index),
+    })),
+    [logFindings],
+  );
+
   const nmapOpenPortsWithKeys = useMemo(
     () => nmapOpenPorts.map((row, index) => ({
       ...row,
@@ -529,7 +690,7 @@ export default function ScanDetail() {
       {
         key: 'online_status',
         header: 'Status',
-        render: (row) => <StatusBadge status={row.online_status || 'unknown'} />,
+        render: (row) => <StatusBadge status={toOnlineStatusLabel(row.online_status)} />,
       },
       {
         key: 'last_seen',
@@ -566,6 +727,8 @@ export default function ScanDetail() {
   );
 
   const nmapSummaryScope = String(summary.scope || '').trim().toLowerCase();
+  const displayedGreenboneRows = activeGreenboneTab === 'logs' ? logFindingsWithKeys : vulnerabilitiesWithKeys;
+
 
   return (
     <div className="page-stack">
@@ -637,8 +800,30 @@ export default function ScanDetail() {
         )}
       </Card>
 
+      {isGreenbone && (
+        <Card title="Report Sections" subtitle="GSA-style view for this Greenbone report.">
+          <div className="device-tab-list">
+            {GREENBONE_SCAN_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                className={`device-tab-button ${activeGreenboneTab === tab.key ? 'active' : ''}`}
+                onClick={() => setActiveGreenboneTab(tab.key)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {(!isGreenbone || activeGreenboneTab === 'information') && (
       <Card title="Summary" subtitle="Scanner-specific aggregation for this scan.">
-        {scan && (scan.status === 'completed' || scan.status === 'failed') && isGreenbone && greenboneSummary && (
+        {scan
+          && (scan.status === 'completed' || scan.status === 'failed')
+          && isGreenbone
+          && activeGreenboneTab === 'information'
+          && greenboneSummary && (
           <div className="device-kpi-grid">
             <div className="kpi-tile">
               <p className="kpi-label">Findings</p>
@@ -709,13 +894,21 @@ export default function ScanDetail() {
               <div className="kpi-tile">
                 <p className="kpi-label">TCP Open</p>
                 <p className="kpi-value">
-                  {summary.tcp_open_ports ?? nmapOpenPorts.filter((row) => String(row.protocol || '').toLowerCase() === 'tcp').length}
+                  {summary.tcp_open_ports
+                    ?? nmapOpenPorts.filter(
+                      (row) => String(row.state || '').toLowerCase() === 'open'
+                        && String(row.protocol || '').toLowerCase() === 'tcp',
+                    ).length}
                 </p>
               </div>
               <div className="kpi-tile">
                 <p className="kpi-label">UDP Open</p>
                 <p className="kpi-value">
-                  {summary.udp_open_ports ?? nmapOpenPorts.filter((row) => String(row.protocol || '').toLowerCase() === 'udp').length}
+                  {summary.udp_open_ports
+                    ?? nmapOpenPorts.filter(
+                      (row) => String(row.state || '').toLowerCase() === 'open'
+                        && String(row.protocol || '').toLowerCase() === 'udp',
+                    ).length}
                 </p>
               </div>
             </div>
@@ -760,9 +953,16 @@ export default function ScanDetail() {
           <p className="muted">Summary will continue to update while the scan is running.</p>
         )}
       </Card>
+      )}
 
-      {isGreenbone && (
-        <Card title="Findings" subtitle="Greenbone results for this scan with expanded remediation and evidence details.">
+      {isGreenbone && (activeGreenboneTab === 'results' || activeGreenboneTab === 'logs') && (
+        <Card
+          title={activeGreenboneTab === 'logs' ? 'Log Findings' : 'Findings'}
+          subtitle={activeGreenboneTab === 'logs'
+            ? 'Informational/Log findings from this Greenbone report.'
+            : 'Greenbone results for this scan with expanded remediation and evidence details.'}
+        >
+          {activeGreenboneTab === 'results' && (
           <div className="settings-form-grid">
             <div className="field-stack">
               <label htmlFor="scanFindingSeverity">Severity</label>
@@ -791,30 +991,33 @@ export default function ScanDetail() {
               />
             </div>
           </div>
+          )}
 
           <div className="table-wrapper table-wrapper-compact">
             <table className="ui-table ui-table-compact">
               <thead>
                 <tr>
+                  <th>Vulnerability</th>
                   <th>Severity</th>
                   <th>QoD</th>
-                  <th>CVSS</th>
-                  <th>Port</th>
+                  <th>Host</th>
+                  <th>Location</th>
                   <th>CVEs</th>
-                  <th>Finding</th>
                   <th className="align-right">Details</th>
                 </tr>
               </thead>
               <tbody>
-                {vulnerabilitiesWithKeys.length === 0 && (
+                {displayedGreenboneRows.length === 0 && (
                   <tr>
                     <td colSpan={7} className="table-empty">
-                      No findings match the current filters.
+                      {activeGreenboneTab === 'logs'
+                        ? 'No informational/log findings in this report.'
+                        : 'No findings match the current filters.'}
                     </td>
                   </tr>
                 )}
 
-                {vulnerabilitiesWithKeys.map((row) => {
+                {displayedGreenboneRows.map((row) => {
                   const bucket = normalizeSeverityBucket(row.cvss_severity || row.severity, row.cvss_score);
                   const cves = toCveArray(row);
                   const hasDetails = Boolean(row.description || row.solution || row.cvss_vector || row.nvt_oid || cves.length > 0);
@@ -823,16 +1026,20 @@ export default function ScanDetail() {
                   return (
                     <Fragment key={row._row_key}>
                       <tr>
+                        <td>{String(row.name || '').trim() || (row.nvt_oid ? `NVT ${row.nvt_oid}` : 'Unnamed finding')}</td>
                         <td>
                           <span className={`severity-chip ${severityClass(bucket)}`}>
-                            {severityLabel(bucket)}
+                            {bucket === 'log'
+                              ? 'Log'
+                              : formatCvss(row.cvss_score) !== '-'
+                                ? `${formatCvss(row.cvss_score)} (${severityLabel(bucket)})`
+                                : severityLabel(bucket)}
                           </span>
                         </td>
                         <td>{formatQod(row.qod)}</td>
-                        <td>{formatCvss(row.cvss_score)}</td>
-                        <td>{Number.isInteger(row.port) ? row.port : '-'}</td>
+                        <td>{row.device_ip || scan?.target || '-'}</td>
+                        <td>{formatGreenboneLocation(row)}</td>
                         <td>{summarizeCves(cves)}</td>
-                        <td>{String(row.name || '').trim() || (row.nvt_oid ? `NVT ${row.nvt_oid}` : 'Unnamed finding')}</td>
                         <td className="align-right">
                           <button
                             type="button"
@@ -906,8 +1113,76 @@ export default function ScanDetail() {
         </Card>
       )}
 
+      {isGreenbone && activeGreenboneTab === 'hosts' && (
+        <Card title="Hosts" subtitle="Affected hosts from this Greenbone report.">
+          <DataTable
+            columns={greenboneDeviceColumns}
+            rows={sortedDiscoveredDevices}
+            emptyMessage="No affected hosts mapped for this report."
+          />
+        </Card>
+      )}
+
+      {isGreenbone && activeGreenboneTab === 'ports' && (
+        <Card title="Ports" subtitle="Location summary based on Greenbone findings for this report.">
+          <DataTable
+            columns={[
+              { key: 'location', header: 'Location' },
+              { key: 'findings_count', header: 'Findings', align: 'right' },
+              { key: 'critical_count', header: 'Critical', align: 'right' },
+              { key: 'high_count', header: 'High', align: 'right' },
+              { key: 'medium_count', header: 'Medium', align: 'right' },
+              { key: 'low_count', header: 'Low', align: 'right' },
+              { key: 'log_count', header: 'Log', align: 'right' },
+              {
+                key: 'top_cvss',
+                header: 'Top CVSS',
+                align: 'right',
+                render: (row) => (Number.isFinite(row.top_cvss) ? Number(row.top_cvss).toFixed(1) : '-'),
+              },
+            ]}
+            rows={greenbonePortRows}
+            rowKey="row_key"
+            emptyMessage="No location/port evidence in this report."
+          />
+        </Card>
+      )}
+
+      {isGreenbone && activeGreenboneTab === 'cves' && (
+        <Card title="CVEs" subtitle="CVE evidence grouped by NVT for this Greenbone report.">
+          <DataTable
+            columns={[
+              {
+                key: 'cves',
+                header: 'CVEs',
+                render: (row) => (row.cves.length > 0 ? row.cves.join(', ') : '-'),
+              },
+              { key: 'nvt_name', header: 'NVT Name' },
+              {
+                key: 'highest_severity',
+                header: 'Highest Severity',
+                render: (row) => (
+                  <span className={`severity-chip ${severityClass(row.highest_bucket)}`}>
+                    {row.highest_severity}
+                  </span>
+                ),
+              },
+              {
+                key: 'top_cvss',
+                header: 'Top CVSS',
+                align: 'right',
+                render: (row) => (Number.isFinite(row.top_cvss) ? Number(row.top_cvss).toFixed(1) : '-'),
+              },
+            ]}
+            rows={greenboneCveRows}
+            rowKey="row_key"
+            emptyMessage="No CVE evidence in this report."
+          />
+        </Card>
+      )}
+
       {!isGreenbone && (
-        <Card title="Open Ports" subtitle="Open-port evidence and script/metadata captured for this scan target.">
+        <Card title="Observed Ports" subtitle="All recorded Nmap port evidence for this scan target.">
           <div className="table-wrapper table-wrapper-compact">
             <table className="ui-table ui-table-compact">
               <thead>
@@ -916,17 +1191,18 @@ export default function ScanDetail() {
                   <th>IP</th>
                   <th>Port</th>
                   <th>Protocol</th>
+                  <th>State</th>
                   <th>Service</th>
                   <th>Version</th>
-                  <th>State</th>
                   <th>Source</th>
+                  <th>Confidence</th>
                   <th className="align-right">Details</th>
                 </tr>
               </thead>
               <tbody>
                 {nmapOpenPortsWithKeys.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="table-empty">No open ports captured for this scan target.</td>
+                    <td colSpan={10} className="table-empty">No port records captured for this scan target.</td>
                   </tr>
                 )}
 
@@ -936,6 +1212,10 @@ export default function ScanDetail() {
                   const metadataEntries = Object.entries(metadata);
                   const hasDetails = metadataEntries.length > 0 || Object.keys(scriptResults).length > 0;
                   const isExpanded = Boolean(expandedPorts[row._row_key]);
+                  const confidence = Number.parseFloat(row.source_confidence);
+                  const normalizedConfidence = Number.isFinite(confidence)
+                    ? confidence > 1 ? confidence / 100 : confidence
+                    : null;
 
                   return (
                     <Fragment key={row._row_key}>
@@ -944,10 +1224,11 @@ export default function ScanDetail() {
                         <td>{row.ip_address || '-'}</td>
                         <td>{Number.isInteger(row.port) ? row.port : '-'}</td>
                         <td>{row.protocol || '-'}</td>
+                        <td><StatusBadge status={row.state || 'unknown'} /></td>
                         <td>{row.service || '-'}</td>
                         <td>{row.version || '-'}</td>
-                        <td><StatusBadge status={row.state || 'unknown'} /></td>
                         <td>{row.last_source || '-'}</td>
+                        <td>{Number.isFinite(normalizedConfidence) ? `${Math.round(normalizedConfidence * 100)}%` : '-'}</td>
                         <td className="align-right">
                           <button
                             type="button"
@@ -962,7 +1243,7 @@ export default function ScanDetail() {
 
                       {isExpanded && (
                         <tr className="port-detail-row">
-                          <td colSpan={9}>
+                          <td colSpan={10}>
                             <div className="port-detail-panel">
                               {Object.keys(scriptResults).length > 0 && (
                                 <section className="port-detail-section">
@@ -1010,18 +1291,115 @@ export default function ScanDetail() {
         </Card>
       )}
 
-      <Card
-        title={isGreenbone ? 'Affected Devices' : 'Discovered Devices'}
-        subtitle={isGreenbone
-          ? 'Devices with findings attributed to this Greenbone report.'
-          : 'Target devices correlated to this Nmap scan context.'}
-      >
-        <DataTable
-          columns={isGreenbone ? greenboneDeviceColumns : nmapDeviceColumns}
-          rows={sortedDiscoveredDevices}
-          emptyMessage={isGreenbone ? 'No affected devices mapped for this report.' : 'No discovered devices mapped for this scan.'}
-        />
-      </Card>
+      {!isGreenbone && (
+        <Card
+          title="Discovered Devices"
+          subtitle="Target hosts correlated to this Nmap scan context."
+        >
+          <DataTable
+            columns={nmapDeviceColumns}
+            rows={sortedDiscoveredDevices}
+            emptyMessage="No discovered devices mapped for this scan."
+          />
+        </Card>
+      )}
+
+      {!isGreenbone && (
+        <Card title="Host Evidence" subtitle="Host-level metadata and script results captured by Nmap parsing.">
+          <div className="table-wrapper table-wrapper-compact">
+            <table className="ui-table ui-table-compact">
+              <thead>
+                <tr>
+                  <th>Device</th>
+                  <th>IP</th>
+                  <th>Status</th>
+                  <th>Last Seen</th>
+                  <th className="align-right">Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedDiscoveredDevices.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="table-empty">No host-level evidence for this scan.</td>
+                  </tr>
+                )}
+
+                {sortedDiscoveredDevices.map((row, index) => {
+                  const metadata = toObject(row.metadata);
+                  const scriptResults = toObject(row.script_results);
+                  const metadataEntries = Object.entries(metadata);
+                  const hasDetails = metadataEntries.length > 0 || Object.keys(scriptResults).length > 0;
+                  const rowKey = `host-${row.id || index}`;
+                  const isExpanded = Boolean(expandedPorts[rowKey]);
+
+                  return (
+                    <Fragment key={rowKey}>
+                      <tr>
+                        <td>{row.display_name || row.hostname || row.ip_address || '-'}</td>
+                        <td>{row.ip_address || '-'}</td>
+                        <td><StatusBadge status={toOnlineStatusLabel(row.online_status)} /></td>
+                        <td>{formatDateTime(row.last_seen)}</td>
+                        <td className="align-right">
+                          <button
+                            type="button"
+                            className="small-button"
+                            disabled={!hasDetails}
+                            onClick={() => togglePort(rowKey)}
+                          >
+                            {isExpanded ? 'Hide' : 'Expand'}
+                          </button>
+                        </td>
+                      </tr>
+
+                      {isExpanded && (
+                        <tr className="port-detail-row">
+                          <td colSpan={5}>
+                            <div className="port-detail-panel">
+                              {Object.keys(scriptResults).length > 0 && (
+                                <section className="port-detail-section">
+                                  <h5>Host Script Results</h5>
+                                  {Object.entries(scriptResults).map(([scriptId, payload]) => {
+                                    const payloadObject = toObject(payload);
+                                    const output = typeof payload === 'string'
+                                      ? payload
+                                      : payloadObject.output || '';
+                                    const detailPayload = payloadObject.details || payloadObject;
+                                    return (
+                                      <article className="port-detail-card" key={`${rowKey}-${scriptId}`}>
+                                        <p className="port-detail-title">{scriptId}</p>
+                                        {output && <p className="port-detail-text">{output}</p>}
+                                        {detailPayload && Object.keys(toObject(detailPayload)).length > 0 && (
+                                          <pre className="port-detail-pre">{JSON.stringify(detailPayload, null, 2)}</pre>
+                                        )}
+                                      </article>
+                                    );
+                                  })}
+                                </section>
+                              )}
+
+                              {metadataEntries.length > 0 && (
+                                <section className="port-detail-section">
+                                  <h5>Host Metadata</h5>
+                                  {metadataEntries.map(([key, value]) => (
+                                    <article className="port-detail-card" key={`${rowKey}-${key}`}>
+                                      <p className="port-detail-title">{key}</p>
+                                      <pre className="port-detail-pre">{JSON.stringify(value, null, 2)}</pre>
+                                    </article>
+                                  ))}
+                                </section>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
