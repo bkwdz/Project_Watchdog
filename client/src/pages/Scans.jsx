@@ -369,7 +369,6 @@ export default function Scans() {
           </button>
         )}
       >
-        <p className="muted">Use scanner-aware modal controls for Nmap discovery or Greenbone vulnerability scans.</p>
       </Card>
 
       <Modal open={modalOpen} title="Create Scan" onClose={() => setModalOpen(false)}>

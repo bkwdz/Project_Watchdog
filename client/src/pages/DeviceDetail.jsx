@@ -1349,7 +1349,7 @@ export default function DeviceDetail() {
         )}
       </Card>
 
-      <Card title="Device Console" subtitle="Detailed host intelligence with reconciled Nmap and Greenbone data.">
+      <Card title="Device Console">
         {loading && <p className="muted">Loading console data...</p>}
         {error && <p className="error-text">{error}</p>}
 
@@ -1669,7 +1669,6 @@ export default function DeviceDetail() {
 
               {activeTab === 'vulnerabilities' && (
                 <>
-                  <p className="muted">Actionable Greenbone findings only. Informational logs are excluded.</p>
                   <div className="table-wrapper table-wrapper-compact">
                     <table className="ui-table ui-table-compact">
                       <thead>
@@ -1764,7 +1763,6 @@ export default function DeviceDetail() {
 
               {activeTab === 'ports' && (
                 <>
-                  <p className="muted">Merged Nmap and Greenbone service data. Expand rows for deep metadata.</p>
                   <div className="table-wrapper table-wrapper-compact">
                     <table className="ui-table ui-table-compact">
                       <thead>
@@ -1913,7 +1911,6 @@ export default function DeviceDetail() {
 
               {activeTab === 'applications' && (
                 <>
-                  <p className="muted">Software inventory from Greenbone CPE evidence with Greenbone-style severity values.</p>
                   <DataTable
                     columns={applicationsColumns}
                     rows={applicationRows}
@@ -1927,7 +1924,6 @@ export default function DeviceDetail() {
 
               {activeTab === 'cves' && (
                 <>
-                  <p className="muted">Greenbone CVE evidence grouped by NVT, without duplicate rows.</p>
                   <DataTable
                     columns={cveColumns}
                     rows={cveRows}

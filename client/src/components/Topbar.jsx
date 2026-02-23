@@ -17,7 +17,6 @@ export default function Topbar({ title }) {
     <header className="topbar">
       <div>
         <h2 className="topbar-title">{title}</h2>
-        <p className="topbar-subtitle">Security Operations Console</p>
       </div>
 
       <div className="topbar-user">

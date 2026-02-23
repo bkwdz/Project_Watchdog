@@ -801,7 +801,7 @@ export default function ScanDetail() {
       </Card>
 
       {isGreenbone && (
-        <Card title="Report Sections" subtitle="GSA-style view for this Greenbone report.">
+        <Card title="Report Sections">
           <div className="device-tab-list">
             {GREENBONE_SCAN_TABS.map((tab) => (
               <button
@@ -818,7 +818,7 @@ export default function ScanDetail() {
       )}
 
       {(!isGreenbone || activeGreenboneTab === 'information') && (
-      <Card title="Summary" subtitle="Scanner-specific aggregation for this scan.">
+      <Card title="Summary">
         {scan
           && (scan.status === 'completed' || scan.status === 'failed')
           && isGreenbone
@@ -1294,7 +1294,6 @@ export default function ScanDetail() {
       {!isGreenbone && (
         <Card
           title="Discovered Devices"
-          subtitle="Target hosts correlated to this Nmap scan context."
         >
           <DataTable
             columns={nmapDeviceColumns}
@@ -1305,7 +1304,7 @@ export default function ScanDetail() {
       )}
 
       {!isGreenbone && (
-        <Card title="Host Evidence" subtitle="Host-level metadata and script results captured by Nmap parsing.">
+        <Card title="Host Evidence">
           <div className="table-wrapper table-wrapper-compact">
             <table className="ui-table ui-table-compact">
               <thead>
